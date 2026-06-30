@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type { CSSProperties } from 'react';
 import {
   CornerDownLeft,
@@ -217,8 +218,12 @@ export default function CommandMenu({
   const extraNamespaces = Object.keys(groupedCommands).filter((namespace) => !preferredOrder.includes(namespace));
   const orderedNamespaces = [...preferredOrder, ...extraNamespaces].filter((namespace) => groupedCommands[namespace]);
 
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
   if (commands.length === 0) {
-    return (
+    return createPortal(
       <div
         ref={menuRef}
         className="command-menu command-menu-empty border border-gray-200 bg-white/95 text-sm text-gray-500 dark:border-gray-700/80 dark:bg-gray-900/95 dark:text-gray-400"
@@ -233,11 +238,16 @@ export default function CommandMenu({
         }}
       >
         No commands available
-      </div>
+      </div>,
+      document.body,
     );
   }
 
-  return (
+  // Portal to <body> so the position:fixed menu escapes the composer's
+  // stacking context. Without this it renders behind the chat messages pane
+  // (z-index:1000 is scoped to a context that sits below that sibling), so the
+  // menu is invisible even though it's open.
+  return createPortal(
     <div
       ref={menuRef}
       role="listbox"
@@ -314,6 +324,7 @@ export default function CommandMenu({
           })}
         </div>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }

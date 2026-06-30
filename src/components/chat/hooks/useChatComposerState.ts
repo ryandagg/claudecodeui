@@ -301,12 +301,18 @@ export function useChatComposerState({
     setInput(commandContent);
     inputValueRef.current = commandContent;
 
-    // Defer submit to next tick so the command text is reflected in UI before dispatching.
-    setTimeout(() => {
-      if (handleSubmitRef.current) {
-        handleSubmitRef.current(createFakeSubmitEvent());
+    // Surface the expanded command text in the composer instead of dispatching it
+    // silently. The user reviews/edits it and presses Enter to send — mirrors the
+    // terminal, where a slash command expands visibly before you submit.
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        return;
       }
-    }, 0);
+      textarea.focus();
+      const caret = commandContent.length;
+      textarea.setSelectionRange(caret, caret);
+    });
   }, [addMessage]);
 
   const executeCommand = useCallback(

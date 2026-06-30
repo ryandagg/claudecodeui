@@ -8,6 +8,8 @@ import CommandPalette from '../command-palette/CommandPalette';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/PaletteOpsContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
+import { useResizableSidebar } from '../../hooks/useResizableSidebar';
+import { useUiPreferences } from '../../hooks/useUiPreferences';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import { api } from '../../utils/api';
@@ -52,6 +54,11 @@ function AppContentInner() {
   const { t } = useTranslation('common');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { ws, sendMessage, subscribe } = useWebSocket();
+  const { width: sidebarWidth, isDragging: isResizingSidebar, onResizeStart } = useResizableSidebar();
+  // The sidebar collapses to a fixed icon rail (w-12) when hidden; only let the
+  // drag-resize width drive the wrapper while the full panel is showing.
+  const { preferences } = useUiPreferences();
+  const isSidebarExpanded = preferences.sidebarVisible;
 
   const {
     processingSessions,
@@ -193,8 +200,31 @@ function AppContentInner() {
   return (
     <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
       {!isMobile ? (
-        <div className="h-full flex-shrink-0 border-r border-border/50">
+        <div
+          className="relative h-full flex-shrink-0 border-r border-border/50"
+          style={isSidebarExpanded ? { width: `${sidebarWidth}px` } : undefined}
+        >
           <Sidebar {...sidebarSharedProps} />
+          {/* Drag handle on the right edge — only while the full panel shows.
+              A wide invisible hit area with a thin visible line on hover/drag
+              keeps it easy to grab. */}
+          {isSidebarExpanded && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t('versionUpdate.ariaLabels.resizeSidebar', 'Resize sidebar')}
+              onPointerDown={onResizeStart}
+              className={`group absolute right-0 top-0 z-20 h-full w-2 translate-x-1/2 cursor-col-resize ${
+                isResizingSidebar ? '' : 'hover:bg-primary/5'
+              }`}
+            >
+              <div
+                className={`absolute left-1/2 top-0 h-full w-px -translate-x-1/2 transition-colors ${
+                  isResizingSidebar ? 'bg-primary' : 'bg-transparent group-hover:bg-primary/40'
+                }`}
+              />
+            </div>
+          )}
         </div>
       ) : (
         <div

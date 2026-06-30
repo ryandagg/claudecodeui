@@ -10,6 +10,7 @@ import type { ArchivedProjectListItem, ArchivedSessionListItem, SidebarSearchMod
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import { getAllSessions } from '../../utils/utils';
 
+import SidebarConversationList from './SidebarConversationList';
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
@@ -194,7 +195,7 @@ export default function SidebarContent({
 
   return (
     <div
-      className="flex h-full flex-col bg-background/80 backdrop-blur-sm md:w-72 md:select-none"
+      className="flex h-full w-full flex-col bg-background/80 backdrop-blur-sm md:select-none"
       style={{}}
     >
       <SidebarHeader
@@ -548,6 +549,15 @@ export default function SidebarContent({
               ))}
             </div>
           )
+        ) : searchMode === 'conversations' ? (
+          // Conversations view (short/empty query): a flat, recency-sorted list
+          // of every loaded session, project shown as an informational label.
+          // A query of >=2 chars switches to the server full-text search above.
+          <SidebarConversationList
+            projectListProps={projectListProps}
+            searchFilter={searchFilter}
+            t={t}
+          />
         ) : (
           <SidebarProjectList {...projectListProps} />
         )}

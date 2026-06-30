@@ -449,7 +449,9 @@ export function useSlashCommands({
         return true;
       }
 
-      if (event.key === 'Tab' || event.key === 'Enter') {
+      // Tab always accepts a suggestion (the highlighted one, else the first
+      // match) — it's the explicit "autocomplete" affordance.
+      if (event.key === 'Tab') {
         event.preventDefault();
         if (selectedCommandIndex >= 0) {
           selectCommandFromKeyboard(filteredCommands[selectedCommandIndex]);
@@ -457,6 +459,22 @@ export function useSlashCommands({
           selectCommandFromKeyboard(filteredCommands[0]);
         }
         return true;
+      }
+
+      // Enter only acts on a command the user explicitly arrow-selected. With
+      // nothing highlighted we let the keypress fall through to normal submit
+      // so the literal typed text is sent (or run, if it exactly names a
+      // command) rather than silently swapped for the nearest fuzzy match —
+      // e.g. typing "/mcp" + Enter no longer fires "/mcp-auth". Close the menu
+      // so it doesn't linger over the now-submitted input.
+      if (event.key === 'Enter') {
+        if (selectedCommandIndex >= 0) {
+          event.preventDefault();
+          selectCommandFromKeyboard(filteredCommands[selectedCommandIndex]);
+          return true;
+        }
+        resetCommandMenuState();
+        return false;
       }
 
       if (event.key === 'Escape') {

@@ -5,6 +5,10 @@ import { IS_PLATFORM } from '../constants/config.js';
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
 
+// local fork: no login. Reuse the existing single-user injection path below
+// (same as platform mode) so handlers/DB keep working without a JWT.
+const LOCAL_NO_AUTH = true;
+
 // Optional API key middleware
 const validateApiKey = (req, res, next) => {
   // Skip API key validation if not configured
@@ -21,18 +25,24 @@ const validateApiKey = (req, res, next) => {
 
 // JWT authentication middleware
 const authenticateToken = async (req, res, next) => {
-  // Platform mode:  use single database user
-  if (IS_PLATFORM) {
+  // Platform mode (or local fork): use single database user
+  if (IS_PLATFORM || LOCAL_NO_AUTH) {
     try {
-      const user = userDb.getFirstUser();
+      let user = userDb.getFirstUser();
+      // local fork: seed a single user on a fresh DB so handlers have req.user.
+      // The password hash is unused (login path is unreachable in this fork).
+      if (!user && LOCAL_NO_AUTH) {
+        userDb.createUser('local', 'local-no-auth');
+        user = userDb.getFirstUser();
+      }
       if (!user) {
-        return res.status(500).json({ error: 'Platform mode: No user found in database' });
+        return res.status(500).json({ error: 'No user found in database' });
       }
       req.user = user;
       return next();
     } catch (error) {
-      console.error('Platform mode error:', error);
-      return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
+      console.error('Single-user auth error:', error);
+      return res.status(500).json({ error: 'Failed to fetch user' });
     }
   }
 
@@ -90,8 +100,8 @@ const generateToken = (user) => {
 
 // WebSocket authentication function
 const authenticateWebSocket = (token) => {
-  // Platform mode: bypass token validation, return first user
-  if (IS_PLATFORM) {
+  // Platform mode (or local fork): bypass token validation, return first user
+  if (IS_PLATFORM || LOCAL_NO_AUTH) {
     try {
       const user = userDb.getFirstUser();
       if (user) {

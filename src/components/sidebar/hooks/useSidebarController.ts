@@ -18,6 +18,7 @@ import {
   clearLegacyStarredProjectIds,
   filterProjects,
   getAllSessions,
+  getSessionDate,
   readLegacyStarredProjectIds,
   readProjectSortOrder,
   sortProjects,
@@ -63,6 +64,14 @@ export type SearchProgress = {
   scannedProjects: number;
   totalProjects: number;
 };
+
+/**
+ * How recently a session must have had activity to count as "running" in the
+ * sidebar's Running view. Matches the 10-minute window the Project view uses
+ * for its green active-session dot (createSessionViewModel.isActive), so the
+ * two activity signals stay consistent and terminal/external sessions surface.
+ */
+const RECENT_ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
 
 type ArchivedSessionsApiPayload = {
   success?: boolean;
@@ -150,7 +159,6 @@ export function useSidebarController({
 
   const isSidebarCollapsed = !isMobile && !sidebarVisible;
   const activeSessionIds = useMemo(() => new Set(activeSessions.keys()), [activeSessions]);
-  const runningSessionsCount = activeSessionIds.size;
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -588,15 +596,26 @@ export function useSidebarController({
   );
 
   const runningProjects = useMemo(() => {
-    if (activeSessionIds.size === 0) {
-      return [];
-    }
+    // "Running" should surface live work regardless of who started it. The
+    // server's chatRunRegistry (activeSessionIds) only knows about runs this
+    // web app initiated over its WebSocket; terminal/external `claude` sessions
+    // never appear there. The Project view's green dot already detects those via
+    // a recency heuristic (last activity within RECENT_ACTIVITY_WINDOW_MS), so
+    // we union both signals here: registry-tracked runs OR recently-active
+    // sessions. This matches user expectation that terminal sessions show too.
+    const now = Date.now();
+    const isRecentlyActive = (session: SessionWithProvider): boolean => {
+      const sessionDate = getSessionDate(session);
+      const ageMs = now - sessionDate.getTime();
+      return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < RECENT_ACTIVITY_WINDOW_MS;
+    };
 
     return sortedProjects.reduce<Project[]>((acc, project) => {
-      const sessions = (project.sessions ?? []).filter((session) => activeSessionIds.has(String(session.id)));
-      const runningCount = sessions.length;
+      const sessions = getAllSessions(project).filter(
+        (session) => activeSessionIds.has(String(session.id)) || isRecentlyActive(session),
+      );
 
-      if (runningCount === 0) {
+      if (sessions.length === 0) {
         return acc;
       }
 
@@ -605,13 +624,20 @@ export function useSidebarController({
         sessions,
         sessionMeta: {
           ...project.sessionMeta,
-          total: runningCount,
+          total: sessions.length,
           hasMore: false,
         },
       });
       return acc;
     }, []);
   }, [activeSessionIds, sortedProjects]);
+
+  // Count agrees with the Running list (registry runs ∪ recently-active),
+  // not just the registry size, so the badge matches what's actually shown.
+  const runningSessionsCount = useMemo(
+    () => runningProjects.reduce((total, project) => total + (project.sessions?.length ?? 0), 0),
+    [runningProjects],
+  );
 
   const filteredProjects = useMemo(
     () => filterProjects(searchMode === 'running' ? runningProjects : sortedProjects, debouncedSearchQuery),

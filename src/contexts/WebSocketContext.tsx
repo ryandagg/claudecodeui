@@ -51,9 +51,13 @@ export const useWebSocket = () => {
   return context;
 };
 
+// local fork: no login, so there is never a JWT. The server's authenticateWebSocket
+// bypasses token validation (LOCAL_NO_AUTH), so connect without a token query param.
+const LOCAL_NO_AUTH = true;
+
 const buildWebSocketUrl = (token: string | null) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws`; // Platform mode: Use same domain as the page (goes through proxy)
+  if (IS_PLATFORM || LOCAL_NO_AUTH) return `${protocol}//${window.location.host}/ws`; // local fork / platform: connect without token
   if (!token) return null;
   return `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`; // OSS mode: Use same host:port that served the page
 };

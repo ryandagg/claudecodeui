@@ -6,6 +6,11 @@ import { spawn } from 'child_process';
 
 const router = express.Router();
 
+// local fork: git identity is owned by the host Claude config. The app must
+// never read or write `git config`. Guards below make the git-config endpoints
+// no-ops; original logic kept for clean upstream rebase.
+const LOCAL_NO_GIT = true;
+
 function spawnAsync(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { ...options, shell: false });
@@ -31,7 +36,7 @@ router.get('/git-config', authenticateToken, async (req, res) => {
     let gitConfig = userDb.getGitConfig(userId);
 
     // If database is empty, try to get from system git config
-    if (!gitConfig || (!gitConfig.git_name && !gitConfig.git_email)) {
+    if (!LOCAL_NO_GIT && (!gitConfig || (!gitConfig.git_name && !gitConfig.git_email))) {
       const systemConfig = await getSystemGitConfig();
 
       // If system has values, save them to database for this user
@@ -71,12 +76,14 @@ router.post('/git-config', authenticateToken, async (req, res) => {
 
     userDb.updateGitConfig(userId, gitName, gitEmail);
 
-    try {
-      await spawnAsync('git', ['config', '--global', 'user.name', gitName]);
-      await spawnAsync('git', ['config', '--global', 'user.email', gitEmail]);
-      console.log(`Applied git config globally: ${gitName} <${gitEmail}>`);
-    } catch (gitError) {
-      console.error('Error applying git config:', gitError);
+    if (!LOCAL_NO_GIT) {
+      try {
+        await spawnAsync('git', ['config', '--global', 'user.name', gitName]);
+        await spawnAsync('git', ['config', '--global', 'user.email', gitEmail]);
+        console.log(`Applied git config globally: ${gitName} <${gitEmail}>`);
+      } catch (gitError) {
+        console.error('Error applying git config:', gitError);
+      }
     }
 
     res.json({

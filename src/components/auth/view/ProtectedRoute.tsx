@@ -11,6 +11,10 @@ type ProtectedRouteProps = {
 };
 
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
+  // local fork: no auth / login / onboarding — render the app directly.
+  // Existing gating logic kept below (unreachable) for clean upstream rebase.
+  return <>{children}</>;
+
   const { user, isLoading, needsSetup, hasCompletedOnboarding, refreshOnboardingStatus } = useAuth();
 
   if (isLoading) {

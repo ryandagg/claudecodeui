@@ -38,6 +38,17 @@ export class ClaudeProviderAuth implements IProviderAuth {
    * Returns Claude installation and credential status using Claude Code's auth priority.
    */
   async getStatus(): Promise<ProviderAuthStatus> {
+    // local fork: auth is environmental (Bedrock proxy via CLAUDE_CODE_USE_BEDROCK).
+    // Always report authenticated so no Login wall renders; real failures surface
+    // from the live SDK query path exactly like a normal `claude` session.
+    return {
+      installed: true,
+      provider: 'claude',
+      authenticated: true,
+      email: 'Local env',
+      method: 'env',
+    };
+
     const installed = this.checkInstalled();
 
     if (!installed) {

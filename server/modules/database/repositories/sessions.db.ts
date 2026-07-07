@@ -10,12 +10,13 @@ type SessionRow = {
   jsonl_path: string | null;
   custom_name: string | null;
   isArchived: number;
+  starred_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, isArchived, starred_at, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -425,5 +426,29 @@ export const sessionsDb = {
   deleteSessionById(sessionId: string): boolean {
     const db = getConnection();
     return db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
+  },
+
+  /**
+   * Toggles the star/pin state for a session. Returns the new starred state.
+   * Starred sessions bubble to the top of the Conversations view via starred_at sort.
+   */
+  toggleSessionStar(sessionId: string): boolean {
+    const db = getConnection();
+    const current = db
+      .prepare('SELECT starred_at FROM sessions WHERE session_id = ?')
+      .get(sessionId) as { starred_at: string | null } | undefined;
+
+    if (!current) {
+      return false;
+    }
+
+    const newStarredState = current.starred_at === null;
+    db.prepare(
+      `UPDATE sessions
+       SET starred_at = ?
+       WHERE session_id = ?`
+    ).run(newStarredState ? new Date().toISOString() : null, sessionId);
+
+    return newStarredState;
   },
 };

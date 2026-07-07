@@ -96,6 +96,10 @@ export const api = {
       method: 'DELETE',
     });
   },
+  toggleSessionStar: (sessionId) =>
+    authenticatedFetch(`/api/providers/sessions/${encodeURIComponent(sessionId)}/toggle-star`, {
+      method: 'POST',
+    }),
   getArchivedSessions: () =>
     authenticatedFetch('/api/providers/sessions/archived'),
   runningSessions: () =>

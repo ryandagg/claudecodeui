@@ -141,7 +141,9 @@ export function useSidebarController({
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
-  const [searchMode, setSearchMode] = useState<SidebarSearchMode>('projects');
+  // Local fork: default to the flat, recency-sorted Conversations view on load
+  // rather than the project-grouped Projects view.
+  const [searchMode, setSearchMode] = useState<SidebarSearchMode>('conversations');
   const [conversationResults, setConversationResults] = useState<ConversationSearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
@@ -150,6 +152,7 @@ export function useSidebarController({
   const [isArchivedSessionsLoading, setIsArchivedSessionsLoading] = useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [optimisticStarByProjectId, setOptimisticStarByProjectId] = useState<Map<string, boolean>>(new Map());
+  const [optimisticStarBySessionId, setOptimisticStarBySessionId] = useState<Map<string, boolean>>(new Map());
   const [loadingMoreProjects, setLoadingMoreProjects] = useState<Set<string>>(new Set());
   const searchSeqRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -529,6 +532,80 @@ export function useSidebarController({
     (projectId: string) => resolveProjectStarState(projectId),
     [resolveProjectStarState],
   );
+
+  const resolveSessionStarState = useCallback(
+    (session: SessionWithProvider): boolean => {
+      if (optimisticStarBySessionId.has(session.id)) {
+        return Boolean(optimisticStarBySessionId.get(session.id));
+      }
+      return Boolean(session.starred_at);
+    },
+    [optimisticStarBySessionId],
+  );
+
+  const isSessionStarred = useCallback(
+    (session: SessionWithProvider) => resolveSessionStarState(session),
+    [resolveSessionStarState],
+  );
+
+  const starToggleSequenceBySessionRef = useRef<Map<string, number>>(new Map());
+
+  const toggleStarSession = useCallback((session: SessionWithProvider) => {
+    const previousStarState = resolveSessionStarState(session);
+    const optimisticStarState = !previousStarState;
+    const latestSequence = (starToggleSequenceBySessionRef.current.get(session.id) ?? 0) + 1;
+    starToggleSequenceBySessionRef.current.set(session.id, latestSequence);
+
+    setOptimisticStarBySessionId((previous) => {
+      const next = new Map(previous);
+      next.set(session.id, optimisticStarState);
+      return next;
+    });
+
+    const updateStar = async () => {
+      try {
+        const response = await api.toggleSessionStar(session.id);
+        if (!response.ok) {
+          const payload = (await response.json()) as { error?: string | { message?: string } };
+          const errorPayload = payload.error;
+          const message =
+            typeof errorPayload === 'string'
+              ? errorPayload
+              : errorPayload && typeof errorPayload === 'object' && errorPayload.message
+                ? errorPayload.message
+                : t('messages.updateSessionError');
+          throw new Error(message);
+        }
+
+        const payload = (await response.json()) as { isStarred?: boolean };
+        const isLatestSequence = starToggleSequenceBySessionRef.current.get(session.id) === latestSequence;
+        if (!isLatestSequence) {
+          return;
+        }
+
+        setOptimisticStarBySessionId((previous) => {
+          const next = new Map(previous);
+          next.set(session.id, Boolean(payload.isStarred));
+          return next;
+        });
+      } catch (error) {
+        const isLatestSequence = starToggleSequenceBySessionRef.current.get(session.id) === latestSequence;
+        if (!isLatestSequence) {
+          return;
+        }
+
+        setOptimisticStarBySessionId((previous) => {
+          const next = new Map(previous);
+          next.set(session.id, previousStarState);
+          return next;
+        });
+        console.error('[Sidebar] Failed to toggle session star:', error);
+        alert(t('messages.updateSessionError'));
+      }
+    };
+
+    void updateStar();
+  }, [resolveSessionStarState, t]);
 
   const getProjectSessions = useCallback((project: Project) => getAllSessions(project), []);
 
@@ -980,6 +1057,8 @@ export function useSidebarController({
     handleSessionClick,
     toggleStarProject,
     isProjectStarred,
+    toggleStarSession,
+    isSessionStarred,
     getProjectSessions,
     loadMoreSessionsForProject,
     startEditing,

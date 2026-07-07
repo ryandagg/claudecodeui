@@ -112,6 +112,12 @@ export function useChatSessionState({
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [totalMessages, setTotalMessages] = useState(0);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  // Synchronous mirror of isUserScrolledUp. The autoscroll effect runs in the
+  // same commit that appends/prepends messages, before the state setter has
+  // flushed — so reading the state there sees a stale value and yanks the
+  // viewport to the bottom while the user is reading older messages. This ref
+  // is written synchronously in the scroll handler and read by that effect.
+  const isUserScrolledUpRef = useRef(false);
   const [tokenBudget, setTokenBudget] = useState<Record<string, unknown> | null>(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState(INITIAL_VISIBLE_MESSAGES);
   const [allMessagesLoaded, setAllMessagesLoaded] = useState(false);
@@ -355,6 +361,7 @@ export function useChatSessionState({
     if (!container) return;
 
     const nearBottom = isNearBottom();
+    isUserScrolledUpRef.current = !nearBottom;
     setIsUserScrolledUp(!nearBottom);
 
     if (!allMessagesLoadedRef.current) {
@@ -369,13 +376,50 @@ export function useChatSessionState({
     }
   }, [isNearBottom, loadOlderMessages]);
 
+  // Restore the reading position after older messages are prepended.
+  //
+  // The naive one-shot restore fired against `scrollHeight` at the instant the
+  // new rows mounted — but that height is transiently *inflated* while markdown,
+  // code highlighting, and images in the prepended messages are still laying
+  // out. It then collapses as content reflows, which left the anchor math
+  // (top + heightDelta) pointing far below where the user was, yanking them
+  // down toward the bottom while they were reading older messages.
+  //
+  // Mirrors the initial-scroll loop below: re-apply the anchor every animation
+  // frame while the height is still settling, capped at ~1s or 3 stable frames.
+  // The delta is recomputed each frame from the captured pre-prepend height, so
+  // as the height collapses the target tracks down to `heightOfPrependedRows`,
+  // keeping the previously-visible messages fixed in place.
   useLayoutEffect(() => {
     if (!pendingScrollRestoreRef.current || !scrollContainerRef.current) return;
     const { height, top } = pendingScrollRestoreRef.current;
-    const container = scrollContainerRef.current;
-    const newScrollHeight = container.scrollHeight;
-    container.scrollTop = top + Math.max(newScrollHeight - height, 0);
     pendingScrollRestoreRef.current = null;
+    const container = scrollContainerRef.current;
+
+    let frame = 0;
+    let lastHeight = 0;
+    let stableCount = 0;
+    let rafId = 0;
+
+    const anchor = () => {
+      if (!scrollContainerRef.current) return;
+      container.scrollTop = top + Math.max(container.scrollHeight - height, 0);
+      if (container.scrollHeight === lastHeight) {
+        stableCount++;
+      } else {
+        stableCount = 0;
+        lastHeight = container.scrollHeight;
+      }
+      frame++;
+      if (stableCount < 3 && frame < 60) {
+        rafId = requestAnimationFrame(anchor);
+      }
+    };
+    anchor();
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
   }, [chatMessages.length]);
 
   // Reset scroll/pagination state on session change
@@ -386,6 +430,7 @@ export function useChatSessionState({
     }
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
+    isUserScrolledUpRef.current = false;
     setIsUserScrolledUp(false);
   }, [selectedProject?.projectId, selectedSession?.id]);
 
@@ -701,7 +746,12 @@ export function useChatSessionState({
     if (searchScrollActiveRef.current) return;
 
     if (autoScrollToBottom) {
-      if (!isUserScrolledUp) setTimeout(() => scrollToBottom(), 50);
+      // Read the live scroll position, not the async `isUserScrolledUp` state:
+      // this effect runs in the same commit that changed the message list, and
+      // the state setter in the scroll handler has not necessarily flushed yet.
+      // Reading stale state here is what yanked the viewport to the bottom while
+      // the user was reading older messages.
+      if (isNearBottom() && !isUserScrolledUpRef.current) setTimeout(() => scrollToBottom(), 50);
       return;
     }
 
@@ -711,7 +761,7 @@ export function useChatSessionState({
     const newHeight = container.scrollHeight;
     const heightDiff = newHeight - prevHeight;
     if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
+  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isNearBottom, isUserScrolledUp, scrollToBottom]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;

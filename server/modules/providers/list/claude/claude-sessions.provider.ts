@@ -214,6 +214,10 @@ async function getSessionMessages(
  */
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
+  // Background-shell/task lifecycle notices the harness injects into the user
+  // turn of the transcript. They are not user input and must stay hidden, like
+  // system reminders — otherwise they render as if the user typed them.
+  '<task-notification>',
   'Caveat:',
   '[Request interrupted',
 ] as const;

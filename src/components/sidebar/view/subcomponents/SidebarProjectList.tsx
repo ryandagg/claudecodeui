@@ -31,10 +31,12 @@ export type SidebarProjectListProps = {
   activeSessions: SessionActivityMap;
   forceExpanded?: boolean;
   isProjectStarred: (projectName: string) => boolean;
+  isSessionStarred: (session: SessionWithProvider) => boolean;
   onEditingNameChange: (value: string) => void;
   onToggleProject: (projectName: string) => void;
   onProjectSelect: (project: Project) => void;
   onToggleStarProject: (projectName: string) => void;
+  onToggleStarSession: (session: SessionWithProvider) => void;
   onStartEditingProject: (project: Project) => void;
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
@@ -77,10 +79,12 @@ export default function SidebarProjectList({
   activeSessions,
   forceExpanded = false,
   isProjectStarred,
+  isSessionStarred,
   onEditingNameChange,
   onToggleProject,
   onProjectSelect,
   onToggleStarProject,
+  onToggleStarSession,
   onStartEditingProject,
   onCancelEditingProject,
   onSaveProjectName,

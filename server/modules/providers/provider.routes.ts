@@ -590,6 +590,15 @@ router.put(
   }),
 );
 
+router.post(
+  '/sessions/:sessionId/toggle-star',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const { isStarred } = sessionsService.toggleSessionStarById(sessionId);
+    res.json({ success: true, isStarred });
+  }),
+);
+
 router.get(
   '/sessions/:sessionId/messages',
   asyncHandler(async (req: Request, res: Response) => {

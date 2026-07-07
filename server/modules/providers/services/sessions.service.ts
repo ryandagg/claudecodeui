@@ -305,4 +305,21 @@ export const sessionsService = {
     sessionsDb.updateSessionCustomName(sessionId, summary);
     return { sessionId, summary };
   },
+
+  /**
+   * Toggles the star/pin state for one session by id. Returns the new state so
+   * the sidebar can reconcile its optimistic update with the persisted value.
+   */
+  toggleSessionStarById(sessionId: string): { sessionId: string; isStarred: boolean } {
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    const isStarred = sessionsDb.toggleSessionStar(sessionId);
+    return { sessionId, isStarred };
+  },
 };

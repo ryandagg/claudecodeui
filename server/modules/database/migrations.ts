@@ -259,6 +259,7 @@ const rebuildSessionsTableWithProjectSchema = (db: Database): void => {
   if (!shouldRebuild) {
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'jsonl_path', 'TEXT');
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'isArchived', 'BOOLEAN DEFAULT 0');
+    addColumnToTableIfNotExists(db, 'sessions', columnNames, 'starred_at', 'DATETIME DEFAULT NULL');
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'created_at', 'DATETIME');
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'updated_at', 'DATETIME');
     db.exec('UPDATE sessions SET isArchived = COALESCE(isArchived, 0)');

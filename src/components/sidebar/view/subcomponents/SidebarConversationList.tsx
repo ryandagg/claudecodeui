@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Edit2, Folder, Loader2, MessageSquare, Trash2, X } from 'lucide-react';
+import { Check, Edit2, Folder, Loader2, MessageSquare, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { buttonVariants } from '../../../../shared/view/ui';
@@ -69,9 +69,11 @@ export default function SidebarConversationList({
     editingSession,
     editingSessionName,
     getProjectSessions,
+    isSessionStarred,
     onSessionSelect,
     onProjectSelect,
     onDeleteSession,
+    onToggleStarSession,
     onEditingSessionNameChange,
     onStartEditingSession,
     onCancelEditingSession,
@@ -90,7 +92,15 @@ export default function SidebarConversationList({
         flattened.push({ project, session, date: getSessionDate(session) });
       }
     }
-    flattened.sort((a, b) => b.date.getTime() - a.date.getTime());
+    // Starred sessions bubble to the top; within each group, most recent first.
+    flattened.sort((a, b) => {
+      const aStarred = isSessionStarred(a.session) ? 1 : 0;
+      const bStarred = isSessionStarred(b.session) ? 1 : 0;
+      if (aStarred !== bStarred) {
+        return bStarred - aStarred;
+      }
+      return b.date.getTime() - a.date.getTime();
+    });
 
     const needle = searchFilter.trim().toLowerCase();
     if (!needle) {
@@ -101,7 +111,7 @@ export default function SidebarConversationList({
       const projectName = (project.displayName || project.path || '').toLowerCase();
       return title.includes(needle) || projectName.includes(needle);
     });
-  }, [projects, getProjectSessions, searchFilter, currentTime, t]);
+  }, [projects, getProjectSessions, isSessionStarred, searchFilter, currentTime, t]);
 
   useEffect(() => {
     if (!editingSession) {
@@ -147,6 +157,8 @@ export default function SidebarConversationList({
         const age = formatCompactAge(getSessionDate(session), currentTime);
         const menuOpen = openMenuFor === session.id;
 
+        const isStarred = isSessionStarred(session);
+
         const select = () => {
           onProjectSelect(project);
           onSessionSelect(session, project.projectId);
@@ -155,6 +167,7 @@ export default function SidebarConversationList({
           onSaveEditingSession(project.projectId, session.id, editingSessionName, session.__provider);
         const requestDelete = () =>
           onDeleteSession(project.projectId, session.id, view.sessionName, session.__provider);
+        const toggleStar = () => onToggleStarSession(session);
 
         return (
           <div key={`${project.projectId}-${session.id}`} className="group relative">
@@ -204,7 +217,9 @@ export default function SidebarConversationList({
               ref={isEditing ? editingContainerRef : null}
               className={cn(
                 'absolute right-2 top-2 flex items-center gap-1 transition-all duration-200',
-                isEditing || menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                // A starred (favorited) session keeps its star indicator visible at rest;
+                // edit/delete stay hover-only via their own opacity gate below.
+                isEditing || menuOpen || isStarred ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
               )}
             >
               {isEditing ? (
@@ -249,7 +264,33 @@ export default function SidebarConversationList({
               ) : (
                 <>
                   <button
-                    className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                    className={cn(
+                      'flex h-6 w-6 items-center justify-center rounded border transition-colors',
+                      isStarred
+                        ? 'bg-yellow-500/10 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800'
+                        : 'bg-gray-500/10 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800',
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleStar();
+                    }}
+                    title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
+                  >
+                    <Star
+                      className={cn(
+                        'h-3 w-3 transition-colors',
+                        isStarred
+                          ? 'text-yellow-600 dark:text-yellow-400 fill-current'
+                          : 'text-gray-600 dark:text-gray-400',
+                      )}
+                    />
+                  </button>
+                  <button
+                    className={cn(
+                      'flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40',
+                      // Only the star pins open on a starred row; edit stays hover-only.
+                      isStarred && !menuOpen ? 'opacity-0 group-hover:opacity-100 transition-opacity duration-200' : '',
+                    )}
                     onClick={(event) => {
                       event.stopPropagation();
                       setOpenMenuFor(null);
@@ -261,7 +302,10 @@ export default function SidebarConversationList({
                   </button>
                   {!isProcessing && (
                     <button
-                      className="flex h-6 w-6 items-center justify-center rounded bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40"
+                      className={cn(
+                        'flex h-6 w-6 items-center justify-center rounded bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40',
+                        isStarred && !menuOpen ? 'opacity-0 group-hover:opacity-100 transition-opacity duration-200' : '',
+                      )}
                       onClick={(event) => {
                         event.stopPropagation();
                         setOpenMenuFor(null);

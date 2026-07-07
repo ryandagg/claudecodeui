@@ -90,6 +90,8 @@ const UNKNOWN_PROJECT_KEY = '__unknown_project__';
 
 const INTERNAL_CONTENT_PREFIXES = [
   '<system-reminder>',
+  // Harness-injected background-shell/task lifecycle notices — not user input.
+  '<task-notification>',
   'Caveat:',
   'Invalid API key',
   '[Request interrupted',

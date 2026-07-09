@@ -766,9 +766,10 @@ export function useChatSessionState({
   // drifts out of view until the next message boundary snaps it back, a visible
   // jump on every chunk. A MutationObserver on the scroll container catches all
   // growth (new messages AND in-place token streaming AND late markdown/code
-  // reflow), and we re-pin from a requestAnimationFrame callback, which runs
-  // before the browser paints — so the grown content is never shown at the
-  // wrong offset. rAF also coalesces the burst of mutations into one pin/frame.
+  // reflow), and we pin **synchronously in the mutation callback** so the
+  // scrollTop update lands in the same microtask as the DOM change, before the
+  // browser paints — no frame is ever shown with the grown content at the wrong
+  // offset.
   //
   // `isUserScrolledUpRef` is the live, synchronous read of whether the user has
   // scrolled away from the bottom; if they have, we leave them where they are.
@@ -776,26 +777,18 @@ export function useChatSessionState({
     const container = scrollContainerRef.current;
     if (!container || !autoScrollToBottom) return;
 
-    let rafId = 0;
-    const schedulePin = () => {
-      if (rafId) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
-        if (!scrollContainerRef.current) return;
-        if (isUserScrolledUpRef.current) return;
-        if (isLoadingMoreRef.current || pendingScrollRestoreRef.current) return;
-        if (searchScrollActiveRef.current) return;
-        container.scrollTop = container.scrollHeight;
-      });
+    const pin = () => {
+      if (!scrollContainerRef.current) return;
+      if (isUserScrolledUpRef.current) return;
+      if (isLoadingMoreRef.current || pendingScrollRestoreRef.current) return;
+      if (searchScrollActiveRef.current) return;
+      container.scrollTop = container.scrollHeight;
     };
 
-    const observer = new MutationObserver(schedulePin);
+    const observer = new MutationObserver(pin);
     observer.observe(container, { childList: true, subtree: true, characterData: true });
 
-    return () => {
-      observer.disconnect();
-      if (rafId) cancelAnimationFrame(rafId);
-    };
+    return () => observer.disconnect();
   }, [autoScrollToBottom]);
 
   // When auto-scroll is OFF, preserve the user's reading position across appends

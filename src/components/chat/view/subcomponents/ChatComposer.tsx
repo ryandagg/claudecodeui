@@ -56,7 +56,6 @@ interface ChatComposerProps {
     requestIds: string | string[],
     decision: { allow?: boolean; message?: string; rememberEntry?: string | null; updatedInput?: unknown },
   ) => void;
-  handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   activity: SessionActivity | null;
   isLoading: boolean;
   onAbortSession: () => void;
@@ -110,7 +109,6 @@ interface ChatComposerProps {
 export default function ChatComposer({
   pendingPermissionRequests,
   handlePermissionDecision,
-  handleGrantToolPermission,
   activity,
   isLoading,
   onAbortSession,
@@ -203,7 +201,7 @@ export default function ChatComposer({
   const hasPendingPermissions = pendingPermissionRequests.length > 0;
 
   return (
-    <div className="chat-composer-shell flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
+    <div className="chat-composer-shell relative z-50 flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
       {!hasPendingPermissions && (
         <ActivityIndicator activity={activity} onAbort={onAbortSession} />
       )}
@@ -213,18 +211,17 @@ export default function ChatComposer({
           <PermissionRequestsBanner
             pendingPermissionRequests={pendingPermissionRequests}
             handlePermissionDecision={handlePermissionDecision}
-            handleGrantToolPermission={handleGrantToolPermission}
           />
         </div>
       )}
 
       {!hasQuestionPanel && <div className="relative mx-auto max-w-4xl">
         {isUserScrolledUp && hasMessages && (
-          <div className="absolute -top-10 left-0 right-0 z-10 flex justify-center">
+          <div className="absolute -top-10 left-0 right-0 z-50 flex justify-center">
             <button
               type="button"
               onClick={onScrollToBottom}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md ring-1 ring-black/5 transition-all duration-200 hover:bg-accent hover:text-accent-foreground dark:ring-white/10"
               title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
             >
               <ArrowDownIcon className="h-4 w-4" />

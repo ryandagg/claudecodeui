@@ -1,6 +1,6 @@
 import { safeJsonParse } from '../../../lib/utils.js';
+import { authenticatedFetch } from '../../../utils/api';
 import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } from '../types/types.js';
-import { CLAUDE_SETTINGS_KEY, getClaudeSettings, safeLocalStorage } from './chatStorage';
 
 export function buildClaudeToolPermissionEntry(toolName?: string, toolInput?: unknown) {
   if (!toolName) return null;
@@ -40,25 +40,28 @@ export function getClaudePermissionSuggestion(
   const entry = buildClaudeToolPermissionEntry(toolName, message.toolInput);
   if (!entry) return null;
 
-  const settings = getClaudeSettings();
-  const isAllowed = settings.allowedTools.includes(entry);
-  return { toolName: toolName || 'UnknownTool', entry, isAllowed };
+  // Whether it's already allowed is authoritative only on the server (settings.json),
+  // so we don't pre-compute it here; the grant call is idempotent regardless.
+  return { toolName: toolName || 'UnknownTool', entry, isAllowed: false };
 }
 
-export function grantClaudeToolPermission(entry: string | null): PermissionGrantResult {
+/**
+ * Persists a tool-permission grant to the single source — ~/.claude/settings.json
+ * permissions.allow — via the server, instead of any app-local store.
+ */
+export async function grantClaudeToolPermission(entry: string | null): Promise<PermissionGrantResult> {
   if (!entry) return { success: false };
 
-  const settings = getClaudeSettings();
-  const alreadyAllowed = settings.allowedTools.includes(entry);
-  const nextAllowed = alreadyAllowed ? settings.allowedTools : [...settings.allowedTools, entry];
-  const nextDisallowed = settings.disallowedTools.filter((tool) => tool !== entry);
-  const updatedSettings = {
-    ...settings,
-    allowedTools: nextAllowed,
-    disallowedTools: nextDisallowed,
-    lastUpdated: new Date().toISOString(),
-  };
-
-  safeLocalStorage.setItem(CLAUDE_SETTINGS_KEY, JSON.stringify(updatedSettings));
-  return { success: true, alreadyAllowed, updatedSettings };
+  try {
+    const response = await authenticatedFetch('/api/settings/claude-permissions/allow', {
+      method: 'POST',
+      body: JSON.stringify({ entry }),
+    });
+    if (!response.ok) {
+      return { success: false };
+    }
+    return { success: true };
+  } catch {
+    return { success: false };
+  }
 }

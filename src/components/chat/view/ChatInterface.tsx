@@ -365,7 +365,6 @@ function ChatInterface({
         <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
-          handleGrantToolPermission={handleGrantToolPermission}
           activity={sessionActivity}
           isLoading={isProcessing}
           onAbortSession={handleAbortSession}

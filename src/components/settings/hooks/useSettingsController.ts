@@ -30,11 +30,9 @@ type UseSettingsControllerArgs = {
   initialTab: string;
 };
 
-type ClaudeSettingsStorage = {
-  allowedTools?: string[];
-  disallowedTools?: string[];
-  skipPermissions?: boolean;
-  projectSortOrder?: ProjectSortOrder;
+type ClaudePermissionsResponse = {
+  success?: boolean;
+  permissions?: { allow?: string[]; deny?: string[]; ask?: string[] };
 };
 
 type CursorSettingsStorage = {
@@ -95,10 +93,13 @@ const readCodeEditorSettings = (): CodeEditorSettingsState => ({
 
 const toResponseJson = async <T>(response: Response): Promise<T> => response.json() as Promise<T>;
 
+// App-only preference (no Claude settings.json equivalent) — kept in its own
+// localStorage key now that the shared `claude-settings` blob is gone.
+const PROJECT_SORT_ORDER_KEY = 'project-sort-order';
+
 const createEmptyClaudePermissions = (): ClaudePermissionsState => ({
   allowedTools: [],
   disallowedTools: [],
-  skipPermissions: false,
 });
 
 const createEmptyCursorPermissions = (): CursorPermissionsState => ({
@@ -172,16 +173,24 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
 
   const loadSettings = useCallback(async () => {
     try {
-      const savedClaudeSettings = parseJson<ClaudeSettingsStorage>(
-        localStorage.getItem('claude-settings'),
-        {},
-      );
-      setClaudePermissions({
-        allowedTools: savedClaudeSettings.allowedTools || [],
-        disallowedTools: savedClaudeSettings.disallowedTools || [],
-        skipPermissions: Boolean(savedClaudeSettings.skipPermissions),
-      });
-      setProjectSortOrder(savedClaudeSettings.projectSortOrder === 'date' ? 'date' : 'name');
+      // Claude permissions come from ~/.claude/settings.json (the single source), read
+      // through the server — not from any app-owned localStorage blob.
+      try {
+        const claudeResponse = await authenticatedFetch('/api/settings/claude-permissions');
+        if (claudeResponse.ok) {
+          const claudeData = await toResponseJson<ClaudePermissionsResponse>(claudeResponse);
+          setClaudePermissions({
+            allowedTools: claudeData.permissions?.allow || [],
+            disallowedTools: claudeData.permissions?.deny || [],
+          });
+        } else {
+          setClaudePermissions(createEmptyClaudePermissions());
+        }
+      } catch {
+        setClaudePermissions(createEmptyClaudePermissions());
+      }
+
+      setProjectSortOrder(localStorage.getItem(PROJECT_SORT_ORDER_KEY) === 'date' ? 'date' : 'name');
 
       const savedCursorSettings = parseJson<CursorSettingsStorage>(
         localStorage.getItem('cursor-tools-settings'),
@@ -257,13 +266,21 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
 
     try {
       const now = new Date().toISOString();
-      localStorage.setItem('claude-settings', JSON.stringify({
-        allowedTools: claudePermissions.allowedTools,
-        disallowedTools: claudePermissions.disallowedTools,
-        skipPermissions: claudePermissions.skipPermissions,
-        projectSortOrder,
-        lastUpdated: now,
-      }));
+
+      // Claude allow/deny persist to ~/.claude/settings.json via the server — the single
+      // source the terminal `claude` and the SDK both read. projectSortOrder is app-only.
+      const claudeResponse = await authenticatedFetch('/api/settings/claude-permissions', {
+        method: 'PUT',
+        body: JSON.stringify({
+          allow: claudePermissions.allowedTools,
+          deny: claudePermissions.disallowedTools,
+        }),
+      });
+      if (!claudeResponse.ok) {
+        throw new Error('Failed to save Claude permissions');
+      }
+
+      localStorage.setItem(PROJECT_SORT_ORDER_KEY, projectSortOrder);
 
       localStorage.setItem('cursor-tools-settings', JSON.stringify({
         allowedCommands: cursorPermissions.allowedCommands,
@@ -298,7 +315,6 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   }, [
     claudePermissions.allowedTools,
     claudePermissions.disallowedTools,
-    claudePermissions.skipPermissions,
     codexPermissionMode,
     cursorPermissions.allowedCommands,
     cursorPermissions.disallowedCommands,

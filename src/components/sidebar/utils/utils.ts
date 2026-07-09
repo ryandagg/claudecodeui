@@ -4,17 +4,9 @@ import type { LLMProvider, Project, ProjectSession } from '../../../types/app';
 import type { ProjectSortOrder, SettingsProject, SessionViewModel, SessionWithProvider } from '../types/types';
 
 export const readProjectSortOrder = (): ProjectSortOrder => {
-  try {
-    const rawSettings = localStorage.getItem('claude-settings');
-    if (!rawSettings) {
-      return 'name';
-    }
-
-    const settings = JSON.parse(rawSettings) as { projectSortOrder?: ProjectSortOrder };
-    return settings.projectSortOrder === 'date' ? 'date' : 'name';
-  } catch {
-    return 'name';
-  }
+  // App-only preference in its own key (the shared `claude-settings` blob is gone now
+  // that Claude permissions live in ~/.claude/settings.json).
+  return localStorage.getItem('project-sort-order') === 'date' ? 'date' : 'name';
 };
 
 const LEGACY_STARRED_PROJECTS_STORAGE_KEY = 'starredProjects';

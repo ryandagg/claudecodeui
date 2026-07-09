@@ -3,7 +3,6 @@ import { ShieldAlertIcon } from 'lucide-react';
 
 import type { PendingPermissionRequest } from '../../types/types';
 import { buildClaudeToolPermissionEntry, formatToolInputForDisplay } from '../../utils/chatPermissions';
-import { getClaudeSettings } from '../../utils/chatStorage';
 import { getPermissionPanel, registerPermissionPanel } from '../../tools/configs/permissionPanelRegistry';
 import { AskUserQuestionPanel } from '../../tools/components/InteractiveRenderers';
 import {
@@ -22,13 +21,11 @@ interface PermissionRequestsBannerProps {
     requestIds: string | string[],
     decision: { allow?: boolean; message?: string; rememberEntry?: string | null; updatedInput?: unknown },
   ) => void;
-  handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
 }
 
 export default function PermissionRequestsBanner({
   pendingPermissionRequests,
   handlePermissionDecision,
-  handleGrantToolPermission,
 }: PermissionRequestsBannerProps) {
   // Filter out plan tool requests — they are handled inline by PlanDisplay
   const filteredRequests = pendingPermissionRequests.filter(
@@ -55,9 +52,7 @@ export default function PermissionRequestsBanner({
 
         const rawInput = formatToolInputForDisplay(request.input);
         const permissionEntry = buildClaudeToolPermissionEntry(request.toolName, rawInput);
-        const settings = getClaudeSettings();
-        const alreadyAllowed = permissionEntry ? settings.allowedTools.includes(permissionEntry) : false;
-        const rememberLabel = alreadyAllowed ? 'Allow (saved)' : 'Allow & remember';
+        const rememberLabel = 'Allow & remember';
         const matchingRequestIds = permissionEntry
           ? pendingPermissionRequests
               .filter(
@@ -107,9 +102,8 @@ export default function PermissionRequestsBanner({
               <ConfirmationAction
                 variant="outline"
                 onClick={() => {
-                  if (permissionEntry && !alreadyAllowed) {
-                    handleGrantToolPermission({ entry: permissionEntry, toolName: request.toolName });
-                  }
+                  // The server persists rememberEntry to ~/.claude/settings.json (the single
+                  // source) when it resolves this decision — no client-side write needed.
                   handlePermissionDecision(matchingRequestIds, { allow: true, rememberEntry: permissionEntry });
                 }}
                 disabled={!permissionEntry}

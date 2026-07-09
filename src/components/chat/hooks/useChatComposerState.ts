@@ -580,7 +580,19 @@ export function useChatComposerState({
                 metadata: { type: 'builtin' },
               } as SlashCommand)
             : undefined);
-        if (matchedCommand && matchedCommand.type !== 'skill') {
+        // Only built-in and custom commands run through /api/commands/execute:
+        // built-ins have server-side handlers, custom commands have a `path` on
+        // disk. NATIVE commands (the ones the CLI advertises via
+        // supportedCommands — /compact, /agents, /usage, …) and SKILLS have no
+        // executable path, so /execute would 400 with "Command path is required
+        // for custom commands". They are sendable slash commands: forwarding the
+        // raw text to the SDK lets the CLI subprocess expand them, exactly like
+        // the terminal. So we let them fall through to the normal message-send
+        // path below. Control commands (/reload-plugins) are handled via the menu.
+        const isServerExecutable =
+          matchedCommand &&
+          (matchedCommand.type === 'built-in' || matchedCommand.type === 'custom');
+        if (isServerExecutable) {
           executeCommand(matchedCommand, isHelpAlias ? '/help' : commandInput);
           setInput('');
           inputValueRef.current = '';
@@ -699,6 +711,11 @@ export function useChatComposerState({
       setTimeout(() => scrollToBottom(), 100);
 
       const getToolsSettings = () => {
+        // Claude reads its allow/deny from ~/.claude/settings.json server-side (the single
+        // source), so the app sends no Claude tool lists. Other providers keep their own stores.
+        if (provider === 'claude') {
+          return { allowedTools: [], disallowedTools: [], skipPermissions: false };
+        }
         try {
           const settingsKey =
             provider === 'cursor'
@@ -967,7 +984,7 @@ export function useChatComposerState({
   }, [canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
-    (suggestion: { entry: string; toolName: string }) => {
+    async (suggestion: { entry: string; toolName: string }) => {
       if (!suggestion || provider !== 'claude') {
         return { success: false };
       }

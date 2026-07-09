@@ -8,8 +8,61 @@ import {
 } from '../modules/database/index.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
+import {
+  readClaudePermissions,
+  writeClaudePermissions,
+  addClaudeAllowRule,
+} from '../modules/providers/list/claude/claude-settings.provider.js';
 
 const router = express.Router();
+
+// ===============================
+// Claude Permissions (single source: ~/.claude/settings.json)
+// ===============================
+
+// Read the effective allow/deny/ask rules from Claude's own settings file — the
+// same file the terminal `claude` reads. This is the app's ONLY permission store.
+router.get('/claude-permissions', async (req, res) => {
+  try {
+    const permissions = await readClaudePermissions();
+    res.json({ success: true, permissions });
+  } catch (error) {
+    console.error('Error reading Claude permissions:', error);
+    res.status(500).json({ error: 'Failed to read Claude permissions' });
+  }
+});
+
+// Replace the allow/deny lists in ~/.claude/settings.json, preserving every other
+// key (env, model, hooks, ...). The SDK enforces these on the next turn via settingSources.
+router.put('/claude-permissions', async (req, res) => {
+  try {
+    const { allow, deny, ask } = req.body || {};
+    const isStringArray = (v) => v === undefined || (Array.isArray(v) && v.every((x) => typeof x === 'string'));
+    if (!isStringArray(allow) || !isStringArray(deny) || !isStringArray(ask)) {
+      return res.status(400).json({ error: 'allow/deny/ask must be arrays of strings' });
+    }
+    const permissions = await writeClaudePermissions({ allow, deny, ask });
+    res.json({ success: true, permissions });
+  } catch (error) {
+    console.error('Error writing Claude permissions:', error);
+    res.status(500).json({ error: 'Failed to write Claude permissions' });
+  }
+});
+
+// Add a single entry to permissions.allow (behind an in-chat "grant permission" action).
+router.post('/claude-permissions/allow', async (req, res) => {
+  try {
+    const { entry } = req.body || {};
+    if (typeof entry !== 'string' || !entry.trim()) {
+      return res.status(400).json({ error: 'entry must be a non-empty string' });
+    }
+    const permissions = await addClaudeAllowRule(entry.trim());
+    res.json({ success: true, permissions });
+  } catch (error) {
+    console.error('Error adding Claude allow rule:', error);
+    res.status(500).json({ error: 'Failed to add Claude allow rule' });
+  }
+});
 
 // ===============================
 // API Keys Management

@@ -28,6 +28,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { addClaudeAllowRule } from './modules/providers/list/claude/claude-settings.provider.js';
 import { createCompleteMessage, createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -173,28 +174,17 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.permissionMode = permissionMode;
   }
 
-  // Map tool settings
-  const settings = toolsSettings || {
-    allowedTools: [],
-    disallowedTools: [],
-    skipPermissions: false
-  };
+  // Tool allow/deny rules are NOT sourced from the app. `settingSources` (below) makes
+  // the SDK load and enforce permissions.allow/deny/ask from the same settings.json files
+  // the terminal `claude` uses — before our canUseTool callback ever runs. Passing our own
+  // lists here would shadow that single source, so we don't. The only tools we add are the
+  // runtime, plan-mode built-ins (additive to whatever settings.json allows).
+  const allowedTools = [];
 
-  // Handle tool permissions
-  if (settings.skipPermissions && permissionMode !== 'plan') {
-    // When skipping permissions, use bypassPermissions mode
-    sdkOptions.permissionMode = 'bypassPermissions';
-  }
-
-  let allowedTools = [...(settings.allowedTools || [])];
-
-  // Add plan mode default tools
   if (permissionMode === 'plan') {
     const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
     for (const tool of planModeTools) {
-      if (!allowedTools.includes(tool)) {
-        allowedTools.push(tool);
-      }
+      allowedTools.push(tool);
     }
   }
 
@@ -205,7 +195,7 @@ function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = settings.disallowedTools || [];
+  sdkOptions.disallowedTools = [];
 
   // Map model (default to sonnet)
   // Valid models: sonnet, opus, haiku, opusplan, sonnet[1m], fable
@@ -637,11 +627,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       if (decision.allow) {
         if (decision.rememberEntry && typeof decision.rememberEntry === 'string') {
+          // Persist the grant to the single source — ~/.claude/settings.json permissions.allow —
+          // so the SDK honors it on every future turn (and the terminal `claude` sees it too).
+          // Also allow it for the remainder of THIS run so the SDK doesn't re-prompt before the
+          // file reload on the next spawn.
           if (!sdkOptions.allowedTools.includes(decision.rememberEntry)) {
             sdkOptions.allowedTools.push(decision.rememberEntry);
           }
-          if (Array.isArray(sdkOptions.disallowedTools)) {
-            sdkOptions.disallowedTools = sdkOptions.disallowedTools.filter(entry => entry !== decision.rememberEntry);
+          try {
+            await addClaudeAllowRule(decision.rememberEntry);
+          } catch (error) {
+            console.error('Failed to persist permission grant to settings.json:', error);
           }
         }
         return { behavior: 'allow', updatedInput: decision.updatedInput ?? input };

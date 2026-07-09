@@ -21,7 +21,7 @@ interface ToolGroupContainerProps {
   getMessageKey: (message: ChatMessage) => string;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
-  onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => PermissionGrantResult | null | undefined;
+  onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => Promise<PermissionGrantResult> | PermissionGrantResult | null | undefined;
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;

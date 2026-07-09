@@ -20,10 +20,12 @@ export type SettingsProject = {
 
 export type AuthStatus = ProviderAuthStatus;
 
+// Mirrors permissions.allow / permissions.deny in ~/.claude/settings.json — the single
+// source. `skipPermissions` is gone: it maps to bypassPermissions mode (a runtime choice
+// via the composer's mode toggle), not a persisted setting.
 export type ClaudePermissionsState = {
   allowedTools: string[];
   disallowedTools: string[];
-  skipPermissions: boolean;
 };
 
 export type NotificationPreferencesState = {

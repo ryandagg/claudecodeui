@@ -446,7 +446,13 @@ export function useChatSessionState({
   // frames. Cancels cleanly on session change via the pending flag.
   useEffect(() => {
     if (!pendingInitialScrollRef.current || !scrollContainerRef.current || isLoadingSessionMessages) return;
-    if (chatMessages.length === 0) { pendingInitialScrollRef.current = false; return; }
+    // Do NOT clear the pending flag on an empty list: the message list is
+    // transiently empty while a session's messages load (and again on WS
+    // reconnect refreshes). Clearing here permanently disabled the
+    // scroll-to-bottom, leaving the session parked at scrollTop 0 with the
+    // newest message far below the fold. Just wait — this effect re-runs when
+    // chatMessages.length changes, and completes once messages arrive.
+    if (chatMessages.length === 0) return;
     if (searchScrollActiveRef.current) { pendingInitialScrollRef.current = false; return; }
 
     const container = scrollContainerRef.current;
@@ -752,20 +758,52 @@ export function useChatSessionState({
     }
   });
 
+  // Keep the viewport pinned to the newest content while auto-scroll is on.
+  //
+  // Streaming grows a single assistant message's text *in place*, so
+  // `chatMessages.length` does not change and a length-keyed effect never
+  // re-fires while the content (and scrollHeight) keeps growing — the bottom
+  // drifts out of view until the next message boundary snaps it back, a visible
+  // jump on every chunk. A MutationObserver on the scroll container catches all
+  // growth (new messages AND in-place token streaming AND late markdown/code
+  // reflow), and we re-pin from a requestAnimationFrame callback, which runs
+  // before the browser paints — so the grown content is never shown at the
+  // wrong offset. rAF also coalesces the burst of mutations into one pin/frame.
+  //
+  // `isUserScrolledUpRef` is the live, synchronous read of whether the user has
+  // scrolled away from the bottom; if they have, we leave them where they are.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || !autoScrollToBottom) return;
+
+    let rafId = 0;
+    const schedulePin = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        if (!scrollContainerRef.current) return;
+        if (isUserScrolledUpRef.current) return;
+        if (isLoadingMoreRef.current || pendingScrollRestoreRef.current) return;
+        if (searchScrollActiveRef.current) return;
+        container.scrollTop = container.scrollHeight;
+      });
+    };
+
+    const observer = new MutationObserver(schedulePin);
+    observer.observe(container, { childList: true, subtree: true, characterData: true });
+
+    return () => {
+      observer.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [autoScrollToBottom]);
+
+  // When auto-scroll is OFF, preserve the user's reading position across appends
+  // instead of pinning to the bottom.
   useEffect(() => {
-    if (!scrollContainerRef.current || chatMessages.length === 0) return;
+    if (autoScrollToBottom || !scrollContainerRef.current || chatMessages.length === 0) return;
     if (isLoadingMoreRef.current || isLoadingMoreMessages || pendingScrollRestoreRef.current) return;
     if (searchScrollActiveRef.current) return;
-
-    if (autoScrollToBottom) {
-      // Read the live scroll position, not the async `isUserScrolledUp` state:
-      // this effect runs in the same commit that changed the message list, and
-      // the state setter in the scroll handler has not necessarily flushed yet.
-      // Reading stale state here is what yanked the viewport to the bottom while
-      // the user was reading older messages.
-      if (isNearBottom() && !isUserScrolledUpRef.current) setTimeout(() => scrollToBottom(), 50);
-      return;
-    }
 
     const container = scrollContainerRef.current;
     const prevHeight = scrollPositionRef.current.height;
@@ -773,7 +811,7 @@ export function useChatSessionState({
     const newHeight = container.scrollHeight;
     const heightDiff = newHeight - prevHeight;
     if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isNearBottom, isUserScrolledUp, scrollToBottom]);
+  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;

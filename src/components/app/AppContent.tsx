@@ -10,6 +10,7 @@ import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/Palett
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useResizableSidebar } from '../../hooks/useResizableSidebar';
 import { useUiPreferences } from '../../hooks/useUiPreferences';
+import { useShortcutHandler } from '../../hooks/useKeyboardShortcuts';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import { api } from '../../utils/api';
@@ -137,6 +138,15 @@ function AppContentInner() {
   usePaletteOpsRegister({
     openSettings,
     refreshProjects: refreshProjectsSilently,
+  });
+
+  // Keyboard shortcut: start a new session in the current session's project
+  // directory. `selectedProject` carries the directory (path/fullPath), so
+  // handleNewSession opens a fresh chat rooted there. No-op with no project.
+  useShortcutHandler('newSessionInCurrentDir', () => {
+    if (selectedProject) {
+      handleNewSession(selectedProject);
+    }
   });
 
   useEffect(() => {

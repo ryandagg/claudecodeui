@@ -115,7 +115,28 @@
     "browser": "Browser",
     "notifications": "Notifications",
     "plugins": "Plugins",
+    "shortcuts": "Shortcuts",
     "about": "About"
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "description": "Customize keyboard shortcuts for common actions.",
+    "recording": "Press keys…",
+    "unassigned": "Unassigned",
+    "editBinding": "Edit shortcut",
+    "resetBinding": "Reset to default",
+    "conflict": "Also assigned to \"{{action}}\"",
+    "hint": "Click a shortcut, then press the key combination. Press Escape to cancel.",
+    "actions": {
+      "newSessionInCurrentDir": {
+        "label": "New session in current directory",
+        "description": "Start a new session in the current session's project directory."
+      },
+      "scrollToBottom": {
+        "label": "Scroll to bottom",
+        "description": "Scroll the chat to the latest message."
+      }
+    }
   },
   "notifications": {
     "title": "Notifications",

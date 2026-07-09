@@ -11,6 +11,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { useShortcutHandler } from '../../../hooks/useKeyboardShortcuts';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -134,6 +135,10 @@ function ChatInterface({
     lastSeqRef,
     sessionStore,
   });
+
+  // Keyboard shortcut: scroll the chat to the newest message — same behavior
+  // as the floating scroll-to-bottom button in the composer.
+  useShortcutHandler('scrollToBottom', scrollToBottomAndReset);
 
   // Brand-new conversation: the composer allocated a stable session id via
   // the session gateway before the first send. Record it locally and put it

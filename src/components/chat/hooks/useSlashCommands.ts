@@ -69,6 +69,30 @@ const isPromiseLike = (value: unknown): value is Promise<unknown> =>
 const isSkillCommand = (command: SlashCommand) =>
   command.type === 'skill' || command.metadata?.type === 'skill';
 
+// Native commands (the ones the installed CLI advertises via supportedCommands)
+// and skills are BOTH insert-only: we drop their text into the composer and let
+// the normal send path forward it to the SDK, which expands them. Routing them
+// through /api/commands/execute would 400 (no commandPath), so never execute them.
+const isNativeCommand = (command: SlashCommand) =>
+  command.type === 'native' || command.metadata?.type === 'native';
+
+const isInsertOnlyCommand = (command: SlashCommand) =>
+  isSkillCommand(command) || isNativeCommand(command);
+
+// A control command isn't sendable text at all — it maps to an SDK control method
+// (e.g. reloadPlugins()). /reload-plugins is REPL-only, never advertised by the
+// CLI, so we inject it here and dispatch it to its own backend route on select.
+const isControlCommand = (command: SlashCommand) =>
+  command.type === 'control' || typeof command.metadata?.action === 'string';
+
+const RELOAD_PLUGINS_COMMAND: SlashCommand = {
+  name: '/reload-plugins',
+  description: 'Reload plugins from disk and refresh the available commands',
+  namespace: 'builtin',
+  type: 'control',
+  metadata: { type: 'control', action: 'reload-plugins' },
+};
+
 const dedupeProviderSkills = (skills: ProviderSkill[]): ProviderSkill[] => {
   const seenCommands = new Set<string>();
 
@@ -149,6 +173,9 @@ export function useSlashCommands({
   const [commandQuery, setCommandQuery] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1);
   const [slashPosition, setSlashPosition] = useState(-1);
+  // Bumped after /reload-plugins so the command list re-fetches and surfaces any
+  // newly-loaded plugin commands without a page reload.
+  const [commandListVersion, setCommandListVersion] = useState(0);
 
   const commandQueryTimerRef = useRef<number | null>(null);
 
@@ -177,8 +204,27 @@ export function useSlashCommands({
         return;
       }
 
+      const workspacePath = selectedProject.fullPath || selectedProject.path || '';
+
+      // Sort a command set by this project's usage history (most-used first).
+      const sortByUsage = (commands: SlashCommand[]): SlashCommand[] => {
+        const parsedHistory = readCommandHistory(selectedProject.projectId);
+        return [...commands].sort((commandA, commandB) => {
+          const commandAUsage = parsedHistory[commandA.name] || 0;
+          const commandBUsage = parsedHistory[commandB.name] || 0;
+          return commandBUsage - commandAUsage;
+        });
+      };
+
+      // The base command set — everything from /api/commands/list. This resolves
+      // fast (native probe is cached, ~500ms cold) and MUST render on its own:
+      // skills are fetched separately below and folded in only when/if they
+      // arrive. Gating the whole menu on skills was the "No commands available"
+      // bug — a slow skills scan (it walks ~/.claude/plugins, 100k+ files) left
+      // the 116 ready native commands invisible.
+      let baseCommands: SlashCommand[] = [];
+
       try {
-        const workspacePath = selectedProject.fullPath || selectedProject.path || '';
         const response = await authenticatedFetch('/api/commands/list', {
           method: 'POST',
           headers: {
@@ -194,46 +240,72 @@ export function useSlashCommands({
         }
 
         const data = await response.json();
-        const skillsParams = new URLSearchParams();
-        if (workspacePath) {
-          skillsParams.set('workspacePath', workspacePath);
-        }
-
-        const skillsResponse = await authenticatedFetch(
-          `/api/providers/${encodeURIComponent(provider)}/skills${skillsParams.toString() ? `?${skillsParams.toString()}` : ''}`,
-        );
-        const skillsData = skillsResponse.ok
-          ? ((await skillsResponse.json()) as ProviderSkillsResponse)
-          : null;
-        const skillCommands = dedupeProviderSkills(skillsData?.data?.skills || [])
-          .map(mapSkillToSlashCommand);
-        const allCommands: SlashCommand[] = [
+        baseCommands = [
           ...((data.builtIn || []) as SlashCommand[]).map((command) => ({
             ...command,
             type: 'built-in',
           })),
-          ...skillCommands,
+          // Native commands the installed CLI advertises (via supportedCommands()):
+          // /clear, /compact, /agents, /context, /init, /review, /usage, plugin
+          // commands, etc. — everything the terminal offers, so autocomplete on
+          // page load mirrors the actual installed Claude Code version.
+          ...((data.native || []) as SlashCommand[]).map((command) => ({
+            ...command,
+            type: 'native',
+          })),
           ...((data.custom || []) as SlashCommand[]).map((command) => ({
             ...command,
             type: 'custom',
           })),
+          // /reload-plugins is a REPL-only control action the CLI never advertises;
+          // inject it so it's discoverable and dispatch it via reloadPlugins().
+          RELOAD_PLUGINS_COMMAND,
         ];
 
-        const parsedHistory = readCommandHistory(selectedProject.projectId);
-        const sortedCommands = [...allCommands].sort((commandA, commandB) => {
-          const commandAUsage = parsedHistory[commandA.name] || 0;
-          const commandBUsage = parsedHistory[commandB.name] || 0;
-          return commandBUsage - commandAUsage;
-        });
-
         if (!cancelled) {
-          setSlashCommands(sortedCommands);
+          setSlashCommands(sortByUsage(baseCommands));
         }
       } catch (error) {
         console.error('Error fetching slash commands:', error);
         if (!cancelled) {
           setSlashCommands([]);
         }
+        return;
+      }
+
+      // Skills, fetched separately so they never block the base menu. Bounded by
+      // an abort timeout: the skills scan can hang under load, and a stuck fetch
+      // must not wipe (or delay) the commands the user already sees.
+      try {
+        const skillsParams = new URLSearchParams();
+        if (workspacePath) {
+          skillsParams.set('workspacePath', workspacePath);
+        }
+
+        const skillsController = new AbortController();
+        const skillsTimeout = window.setTimeout(() => skillsController.abort(), 10_000);
+
+        const skillsResponse = await authenticatedFetch(
+          `/api/providers/${encodeURIComponent(provider)}/skills${skillsParams.toString() ? `?${skillsParams.toString()}` : ''}`,
+          { signal: skillsController.signal },
+        ).finally(() => window.clearTimeout(skillsTimeout));
+
+        const skillsData = skillsResponse.ok
+          ? ((await skillsResponse.json()) as ProviderSkillsResponse)
+          : null;
+        const skillCommands = dedupeProviderSkills(skillsData?.data?.skills || [])
+          .map(mapSkillToSlashCommand);
+
+        // Fold skills into the already-rendered menu, grouped right after the
+        // built-ins (matching the original ordering before usage-sort).
+        if (!cancelled && skillCommands.length > 0) {
+          const builtIns = baseCommands.filter((command) => command.type === 'built-in');
+          const others = baseCommands.filter((command) => command.type !== 'built-in');
+          setSlashCommands(sortByUsage([...builtIns, ...skillCommands, ...others]));
+        }
+      } catch (error) {
+        // Aborted or failed skills fetch is non-fatal — the base menu stands.
+        console.error('Error fetching provider skills (menu still usable):', error);
       }
     };
 
@@ -241,7 +313,7 @@ export function useSlashCommands({
     return () => {
       cancelled = true;
     };
-  }, [selectedProject, provider]);
+  }, [selectedProject, provider, commandListVersion]);
 
   useEffect(() => {
     if (!showCommandMenu) {
@@ -330,16 +402,66 @@ export function useSlashCommands({
     [onExecuteCommand, resetCommandMenuState],
   );
 
+  const dispatchControlCommand = useCallback(
+    (command: SlashCommand) => {
+      const action = command.metadata?.action;
+
+      // A control command isn't sendable text, so strip the trigger token the
+      // user typed (e.g. "/reload-plugins") out of the composer instead of
+      // leaving it stranded. Mirror the slice logic insertCommandIntoInput uses.
+      const currentTextarea = textareaRef.current;
+      const removalStart = slashPosition >= 0
+        ? slashPosition
+        : currentTextarea?.selectionStart ?? input.length;
+      const textBeforeCommand = input.slice(0, removalStart);
+      const textAfterCommandStart = input.slice(removalStart);
+      const spaceIndex = textAfterCommandStart.indexOf(' ');
+      const textAfterCommand = slashPosition >= 0 && spaceIndex !== -1
+        ? textAfterCommandStart.slice(spaceIndex).trimStart()
+        : input.slice(currentTextarea?.selectionEnd ?? removalStart);
+      setInput(`${textBeforeCommand}${textAfterCommand}`);
+
+      resetCommandMenuState();
+
+      if (action === 'reload-plugins') {
+        const workspacePath =
+          selectedProject?.fullPath || selectedProject?.path || '';
+        void authenticatedFetch('/api/commands/reload-plugins', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectPath: workspacePath || undefined }),
+        })
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error('reload-plugins request failed');
+            }
+            // Force the command list to re-fetch so newly-loaded plugin commands
+            // appear in autocomplete immediately.
+            setCommandListVersion((version) => version + 1);
+          })
+          .catch((error) => {
+            console.error('Error reloading plugins:', error);
+          });
+      }
+    },
+    [resetCommandMenuState, selectedProject, input, setInput, slashPosition, textareaRef],
+  );
+
   const selectCommandFromKeyboard = useCallback(
     (command: SlashCommand) => {
-      if (isSkillCommand(command)) {
+      if (isControlCommand(command)) {
+        dispatchControlCommand(command);
+        return;
+      }
+
+      if (isInsertOnlyCommand(command)) {
         insertCommandIntoInput(command);
         return;
       }
 
       executeNonSkillCommand(command);
     },
-    [executeNonSkillCommand, insertCommandIntoInput],
+    [dispatchControlCommand, executeNonSkillCommand, insertCommandIntoInput],
   );
 
   const handleCommandSelect = useCallback(
@@ -354,14 +476,19 @@ export function useSlashCommands({
       }
 
       trackCommandUsage(command);
-      if (isSkillCommand(command)) {
+      if (isControlCommand(command)) {
+        dispatchControlCommand(command);
+        return;
+      }
+
+      if (isInsertOnlyCommand(command)) {
         insertCommandIntoInput(command);
         return;
       }
 
       executeNonSkillCommand(command);
     },
-    [selectedProject, trackCommandUsage, insertCommandIntoInput, executeNonSkillCommand],
+    [selectedProject, trackCommandUsage, dispatchControlCommand, insertCommandIntoInput, executeNonSkillCommand],
   );
 
   const handleToggleCommandMenu = useCallback(() => {

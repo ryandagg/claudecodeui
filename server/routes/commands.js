@@ -5,6 +5,11 @@ import path from "path";
 import express from "express";
 
 import { providerModelsService } from "../modules/providers/services/provider-models.service.js";
+import {
+  getNativeSlashCommands,
+  invalidateNativeSlashCommandsCache,
+  reloadPlugins,
+} from "../modules/providers/list/claude/claude-native-commands.provider.js";
 import { parseFrontMatter } from "../shared/frontmatter.js";
 import { findAppRoot, getModuleDir } from "../utils/runtime-paths.js";
 
@@ -471,10 +476,43 @@ router.post("/list", async (req, res) => {
     // Sort commands alphabetically by name
     customCommands.sort((a, b) => a.name.localeCompare(b.name));
 
+    // Native commands: the authoritative list the installed Claude CLI exposes
+    // (skills, plugin commands, and native builtins like /clear, /compact,
+    // /agents, /context, /init, /review, /usage). Fetched live from the SDK so
+    // autocomplete reflects the actual installed version, not a hardcoded set.
+    // Deduped against the names we already return so we never list one twice.
+    let nativeCommands = [];
+    try {
+      const knownNames = new Set([
+        ...builtInCommands.map((cmd) => cmd.name),
+        ...customCommands.map((cmd) => cmd.name),
+      ]);
+      const native = await getNativeSlashCommands(projectPath || undefined);
+      nativeCommands = native
+        .map((cmd) => {
+          const name = cmd.name.startsWith("/") ? cmd.name : `/${cmd.name}`;
+          return {
+            name,
+            description: cmd.description || "",
+            namespace: "native",
+            argumentHint: cmd.argumentHint || "",
+            aliases: Array.isArray(cmd.aliases) ? cmd.aliases : [],
+            metadata: { type: "native" },
+          };
+        })
+        .filter((cmd) => !knownNames.has(cmd.name))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (nativeError) {
+      // Native discovery is best-effort; the hardcoded builtins + custom files
+      // still render if the CLI probe fails.
+      console.error("Failed to include native commands:", nativeError.message);
+    }
+
     res.json({
       builtIn: builtInCommands,
       custom: customCommands,
-      count: allCommands.length,
+      native: nativeCommands,
+      count: allCommands.length + nativeCommands.length,
     });
   } catch (error) {
     console.error("Error listing commands:", error);
@@ -589,6 +627,52 @@ router.post("/execute", async (req, res) => {
     console.error("Error executing command:", error);
     res.status(500).json({
       error: "Failed to execute command",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/commands/reload-plugins
+ * Reload plugins from disk via the SDK control method `query.reloadPlugins()`.
+ *
+ * `/reload-plugins` is a REPL-only meta-command — the CLI never advertises it
+ * through supportedCommands(), so it can't be sent as a turn. This route invokes
+ * the SDK control method directly and invalidates the native-command cache so the
+ * next /list re-probes and surfaces any newly-loaded plugin commands.
+ */
+router.post("/reload-plugins", async (req, res) => {
+  try {
+    const { projectPath } = req.body || {};
+    const result = await reloadPlugins(projectPath || undefined);
+
+    if (!result.ok) {
+      return res.status(500).json({
+        error: "Failed to reload plugins",
+        message: result.error || "Unknown error",
+      });
+    }
+
+    // Belt-and-suspenders: reloadPlugins() already invalidates, but ensure the
+    // next /list re-probes regardless of provider internals.
+    invalidateNativeSlashCommandsCache();
+
+    res.json({
+      type: "builtin",
+      action: "reload-plugins",
+      data: {
+        commandCount: result.commandCount,
+        agentCount: result.agentCount,
+        message:
+          typeof result.commandCount === "number"
+            ? `Plugins reloaded — ${result.commandCount} commands available.`
+            : "Plugins reloaded.",
+      },
+    });
+  } catch (error) {
+    console.error("Error reloading plugins:", error);
+    res.status(500).json({
+      error: "Failed to reload plugins",
       message: error.message,
     });
   }

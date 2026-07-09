@@ -729,8 +729,20 @@ export function useChatSessionState({
   }, [selectedProject, selectedSession?.id]);
 
   const visibleMessages = useMemo(() => {
-    if (chatMessages.length <= visibleMessageCount) return chatMessages;
-    return chatMessages.slice(-visibleMessageCount);
+    const total = chatMessages.length;
+    if (total <= visibleMessageCount) return chatMessages;
+
+    // Batched front-trim. Slicing to exactly `visibleMessageCount` on every
+    // render drops the oldest visible message on *each* new streamed message,
+    // which makes the viewport jump constantly. Instead, only trim from the
+    // front in whole batches of MESSAGES_PER_PAGE: the window is allowed to
+    // grow up to +MESSAGES_PER_PAGE past the cap, then snaps back down. Net
+    // effect — one trim per ~20 additions, not one per message. Pagination is
+    // unaffected: it still works by raising `visibleMessageCount` itself, and
+    // load-all sets it to Infinity (so `total <= count` short-circuits above).
+    const overflow = total - visibleMessageCount;
+    const dropFromFront = Math.ceil(overflow / MESSAGES_PER_PAGE) * MESSAGES_PER_PAGE;
+    return chatMessages.slice(dropFromFront);
   }, [chatMessages, visibleMessageCount]);
 
   useEffect(() => {

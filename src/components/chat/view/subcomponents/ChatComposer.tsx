@@ -11,7 +11,7 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon, Loader2 } from 'lucide-react';
+import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon, Loader2, CopyIcon, CheckIcon } from 'lucide-react';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
@@ -104,6 +104,7 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  sessionJsonlPath?: string | null;
 }
 
 export default function ChatComposer({
@@ -157,8 +158,24 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  sessionJsonlPath,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
+  const [pathCopied, setPathCopied] = useState(false);
+  const pathCopyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleCopySessionPath = useCallback(() => {
+    if (!sessionJsonlPath) return;
+    void navigator.clipboard.writeText(sessionJsonlPath).then(() => {
+      setPathCopied(true);
+      if (pathCopyTimer.current) clearTimeout(pathCopyTimer.current);
+      pathCopyTimer.current = setTimeout(() => setPathCopied(false), 1500);
+    });
+  }, [sessionJsonlPath]);
+  useEffect(() => {
+    return () => {
+      if (pathCopyTimer.current) clearTimeout(pathCopyTimer.current);
+    };
+  }, []);
   const commandMenuPosition = useMemo(() => {
     if (!isCommandMenuOpen) {
       return { top: 0, left: 16, bottom: 90 };
@@ -413,13 +430,38 @@ export default function ChatComposer({
           </PromptInputTools>
 
           <div className="flex items-center gap-2">
-            <div
-              className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
-                input.trim() ? 'opacity-0' : 'opacity-100'
-              }`}
-            >
-              {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
-            </div>
+            {sessionJsonlPath ? (
+              <button
+                type="button"
+                onClick={handleCopySessionPath}
+                title={t('input.sessionPath.tooltip', {
+                  defaultValue: 'Copy session transcript path for handoff to another agent',
+                })}
+                className={`hidden max-w-[46ch] items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-xs text-muted-foreground/50 transition-opacity duration-200 hover:text-muted-foreground/80 lg:flex ${
+                  input.trim() ? 'opacity-0' : 'opacity-100'
+                }`}
+              >
+                {pathCopied ? (
+                  <CheckIcon className="h-3 w-3 shrink-0" />
+                ) : (
+                  <CopyIcon className="h-3 w-3 shrink-0" />
+                )}
+                {/* dir=rtl puts the ellipsis on the left (keeps the session-id
+                    filename visible); the inner bdi keeps the path itself LTR so
+                    the leading slash doesn't visually jump to the end. */}
+                <span className="truncate" dir="rtl">
+                  <bdi dir="ltr">{sessionJsonlPath}</bdi>
+                </span>
+              </button>
+            ) : (
+              <div
+                className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
+                  input.trim() ? 'opacity-0' : 'opacity-100'
+                }`}
+              >
+                {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
+              </div>
+            )}
             <PromptInputSubmit
               onClick={
                 isLoading

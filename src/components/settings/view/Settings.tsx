@@ -7,6 +7,7 @@ import { Button } from '../../../shared/view/ui';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AgentsSettingsTab from '../view/tabs/agents-settings/AgentsSettingsTab';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
+import SessionsSettingsTab from '../view/tabs/SessionsSettingsTab';
 import CredentialsSettingsTab from '../view/tabs/api-settings/CredentialsSettingsTab';
 import VoiceSettingsTab from '../view/tabs/VoiceSettingsTab';
 import GitSettingsTab from '../view/tabs/git-settings/GitSettingsTab';
@@ -176,6 +177,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                   onCodeEditorFontSizeChange={(value) => updateCodeEditorSetting('fontSize', value)}
                 />
               )}
+
+              {activeTab === 'sessions' && <SessionsSettingsTab />}
 
               {activeTab === 'git' && <GitSettingsTab />}
 

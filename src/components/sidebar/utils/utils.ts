@@ -88,13 +88,42 @@ export const createSessionViewModel = (
   };
 };
 
+export const HIDDEN_SESSION_STORAGE_KEY = 'hidden-session-patterns';
+
+export const getHiddenSessionPatterns = (): string[] => {
+  try {
+    return JSON.parse(localStorage.getItem(HIDDEN_SESSION_STORAGE_KEY) || '["^ping$"]') as string[];
+  } catch {
+    return ['^ping$'];
+  }
+};
+
+export const setHiddenSessionPatterns = (patterns: string[]): void => {
+  localStorage.setItem(HIDDEN_SESSION_STORAGE_KEY, JSON.stringify(patterns));
+  hiddenSessionRegexes = compilePatterns(patterns);
+};
+
+const compilePatterns = (patterns: string[]): RegExp[] =>
+  patterns.flatMap((p) => {
+    try { return [new RegExp(p, 'i')]; } catch { return []; }
+  });
+
+let hiddenSessionRegexes: RegExp[] = compilePatterns(getHiddenSessionPatterns());
+
+const isHiddenSession = (session: ProjectSession): boolean => {
+  const name = (session.summary || session.name || session.title || '').trim();
+  return hiddenSessionRegexes.some((re) => re.test(name));
+};
+
 export const getAllSessions = (project: Project): SessionWithProvider[] => {
-  return (project.sessions || []).map((session) => ({
-    ...session,
-    __provider: getSessionProvider(session),
-  })).sort(
-    (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
-  );
+  return (project.sessions || [])
+    .filter((session) => !isHiddenSession(session))
+    .map((session) => ({
+      ...session,
+      __provider: getSessionProvider(session),
+    })).sort(
+      (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
+    );
 };
 
 export const getProjectLastActivity = (project: Project): Date => {

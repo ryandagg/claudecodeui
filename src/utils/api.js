@@ -53,6 +53,8 @@ export const api = {
   // config endpoint removed - no longer needed (frontend uses window.location)
   // After the projectName → projectId migration the path/query identifier is
   // the DB-assigned `projectId`; parameter names reflect that for clarity.
+  // Server home directory, used client-side to expand `~/...` file references.
+  systemHome: () => authenticatedFetch('/api/system/home'),
   projects: () => authenticatedFetch('/api/projects'),
   archivedProjects: () => authenticatedFetch('/api/projects/archived'),
   projectSessions: (projectId, { limit = 20, offset = 0 } = {}) => {

@@ -116,7 +116,8 @@
     "notifications": "Notifications",
     "plugins": "Plugins",
     "shortcuts": "Shortcuts",
-    "about": "About"
+    "about": "About",
+    "sessions": "Sessions"
   },
   "shortcuts": {
     "title": "Keyboard Shortcuts",

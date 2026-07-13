@@ -561,11 +561,12 @@ export function useChatSessionState({
 
     lastLoadedSessionKeyRef.current = sessionKey;
 
-    // Fetch from server → store updates → chatMessages re-derives automatically
+    // Fetch ALL messages from the server so prompt history (ArrowUp/Down) and
+    // message rendering have the full transcript from the start. The per-session
+    // message count is bounded enough for a personal-use fork.
     setIsLoadingSessionMessages(true);
     sessionStore.fetchFromServer(selectedSessionId, {
-      limit: MESSAGES_PER_PAGE,
-      offset: 0,
+      limit: null,
     }).then(slot => {
       if (slot) {
         setHasMoreMessages(slot.hasMore);

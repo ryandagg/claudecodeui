@@ -14,6 +14,7 @@ type SessionSummary = {
   messageCount: number;
   lastActivity: string;
   starred_at: string | null;
+  jsonlPath: string | null;
 };
 
 type SessionRepositoryRow = {
@@ -23,6 +24,7 @@ type SessionRepositoryRow = {
   updated_at?: string | null;
   created_at?: string | null;
   starred_at?: string | null;
+  jsonl_path?: string | null;
 };
 
 export type ProjectListItem = {
@@ -127,6 +129,7 @@ function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
     messageCount: 0,
     lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
     starred_at: row.starred_at ?? null,
+    jsonlPath: row.jsonl_path ?? null,
   };
 }
 

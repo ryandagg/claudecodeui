@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
@@ -12,7 +12,7 @@ import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useFileOpenResolver } from '../../../hooks/useFileOpenResolver';
-import { authenticatedFetch } from '../../../utils/api';
+import { api, authenticatedFetch } from '../../../utils/api';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
@@ -82,6 +82,51 @@ function MainContent({
   // real project files before opening them in the in-app editor.
   const resolvedFileOpen = useFileOpenResolver(selectedProject, handleFileOpen);
 
+  // The browser can't expand `~` (it doesn't know $HOME), so we fetch the
+  // server's home directory once and cache it to rewrite `~/...` refs to
+  // absolute paths before building a `vscode://file/...` URI.
+  const homedirRef = useRef<string | null>(null);
+  const homedirPromiseRef = useRef<Promise<string | null> | null>(null);
+  const loadHomedir = useCallback((): Promise<string | null> => {
+    if (homedirRef.current !== null) return Promise.resolve(homedirRef.current);
+    if (!homedirPromiseRef.current) {
+      homedirPromiseRef.current = (async () => {
+        try {
+          const response = await api.systemHome();
+          if (!response.ok) return null;
+          const data = await response.json();
+          const home = typeof data?.homedir === 'string' ? data.homedir.replace(/\/+$/, '') : null;
+          homedirRef.current = home;
+          return home;
+        } catch {
+          return null;
+        }
+      })();
+    }
+    return homedirPromiseRef.current;
+  }, []);
+
+  // Hands the OS a `vscode://file/<abspath>[:line]` URI, which it routes to VS
+  // Code. `encodeURI` keeps `/` and `:` intact while escaping spaces etc.
+  const openAbsoluteInVSCode = useCallback((absolutePath: string, line?: number) => {
+    const suffix = typeof line === 'number' && line > 0 ? `:${line}` : '';
+    const uri = `vscode://file${encodeURI(absolutePath)}${suffix}`;
+    const anchor = document.createElement('a');
+    anchor.href = uri;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }, []);
+
+  // ⌘/Ctrl-click on an in-chat file link opens it in VS Code. Bare/partial refs
+  // (`foo.ts`, `utils/foo.ts`) still resolve against the project file tree to an
+  // absolute path first; absolute refs skip that fetch (handled below).
+  const openResolvedInVSCode = useFileOpenResolver(
+    selectedProject,
+    useCallback((absolutePath: string, line?: number) => openAbsoluteInVSCode(absolutePath, line), [openAbsoluteInVSCode]),
+  );
+
   useEffect(() => {
     // Identify projects by DB `projectId`; the TaskMaster context uses the
     // same identifier to key its internal maps.
@@ -129,6 +174,27 @@ function MainContent({
     // Opens the editor side panel in place, keeping the current tab (e.g. chat).
     openFileInEditor: (filePath: string) => {
       resolvedFileOpen(filePath);
+    },
+    // Opens the file in VS Code (⌘/Ctrl-click on an in-chat link). Split off any
+    // `:line[:col]` suffix, then open. Absolute paths (the common form Claude
+    // emits) open immediately; `~/...` refs expand against the server's home dir;
+    // bare/partial refs resolve against the file tree so `vscode://file/...`
+    // always gets an absolute path.
+    openFileInVSCode: (filePath: string) => {
+      const match = filePath.match(/:(\d+)(?::\d+)?$/);
+      const line = match ? Number(match[1]) : undefined;
+      const bareRef = match ? filePath.slice(0, match.index) : filePath;
+      if (bareRef === '~' || bareRef.startsWith('~/')) {
+        void loadHomedir().then((home) => {
+          if (!home) return;
+          const expanded = bareRef === '~' ? home : `${home}/${bareRef.slice(2)}`;
+          openAbsoluteInVSCode(expanded, line);
+        });
+      } else if (bareRef.startsWith('/') || /^[A-Za-z]:[\\/]/.test(bareRef)) {
+        openAbsoluteInVSCode(bareRef, line);
+      } else {
+        openResolvedInVSCode(bareRef, line);
+      }
     },
   });
 

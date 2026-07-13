@@ -44,6 +44,8 @@ interface UseChatComposerStateArgs {
   tokenBudget: Record<string, unknown> | null;
   sendMessage: (message: unknown) => void;
   sendByCtrlEnter?: boolean;
+  onHistoryKeyDown?: (event: { key: string; currentTarget: HTMLTextAreaElement }) => boolean;
+  onHistoryReset?: () => void;
   onSessionProcessing?: MarkSessionProcessing;
   /**
    * Invoked with the freshly allocated session id when the user sends the
@@ -178,6 +180,8 @@ export function useChatComposerState({
   tokenBudget,
   sendMessage,
   sendByCtrlEnter,
+  onHistoryKeyDown,
+  onHistoryReset,
   onSessionProcessing,
   onSessionEstablished,
   onInputFocusChange,
@@ -882,6 +886,7 @@ export function useChatComposerState({
       setInput(newValue);
       inputValueRef.current = newValue;
       setCursorPosition(cursorPos);
+      onHistoryReset?.();
 
       if (!newValue.trim()) {
         event.target.style.height = 'auto';
@@ -892,7 +897,7 @@ export function useChatComposerState({
 
       handleCommandInputChange(newValue, cursorPos);
     },
-    [handleCommandInputChange, resetCommandMenuState, setCursorPosition],
+    [handleCommandInputChange, onHistoryReset, resetCommandMenuState, setCursorPosition],
   );
 
   const handleKeyDown = useCallback(
@@ -902,6 +907,12 @@ export function useChatComposerState({
       }
 
       if (handleFileMentionsKeyDown(event)) {
+        return;
+      }
+
+      // Shell-style prompt history (ArrowUp/Down at cursor boundary).
+      if (onHistoryKeyDown?.(event)) {
+        event.preventDefault();
         return;
       }
 
@@ -930,6 +941,7 @@ export function useChatComposerState({
       handleCommandMenuKeyDown,
       handleFileMentionsKeyDown,
       handleSubmit,
+      onHistoryKeyDown,
       sendByCtrlEnter,
       showCommandMenu,
       showFileDropdown,
@@ -1035,6 +1047,7 @@ export function useChatComposerState({
   return {
     input,
     setInput,
+    inputValueRef,
     textareaRef,
     inputHighlightRef,
     isTextareaExpanded,

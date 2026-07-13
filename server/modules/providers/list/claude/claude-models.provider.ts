@@ -41,6 +41,11 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       description: 'Opus 4.8 with 1M context · Most capable for complex work · $5/$25 per Mtok',
     },
     {
+      value: 'opus',
+      label: 'Opus 4.6',
+      description: 'Opus 4.6 · Fast mode for Opus · $5/$25 per Mtok',
+    },
+    {
       value: 'haiku',
       label: 'Haiku',
       description: 'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',

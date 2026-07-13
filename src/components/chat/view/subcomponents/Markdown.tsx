@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -35,6 +35,25 @@ const looksLikeFilePath = (value?: string): value is string => {
   return /[\\/]/.test(cleaned) || /\.[a-z0-9]+$/i.test(cleaned);
 };
 
+// Inline code often IS a file path (`src/foo.ts`, `server/index.js:42`), but it
+// is just as often prose-y identifiers (`array.map`, `Math.random`, `--flag`).
+// Only linkify inline code that carries a path separator and no whitespace, so
+// dotted method calls and option flags stay plain text.
+const inlineCodeLooksLikePath = (value: string): boolean => {
+  const cleaned = stripLineSuffix(value.trim());
+  if (!cleaned || /\s/.test(cleaned)) {
+    return false;
+  }
+  return /[\\/]/.test(cleaned) && looksLikeFilePath(cleaned);
+};
+
+// Chooses editor target: ⌘ (mac) / Ctrl (win/linux) opens VS Code, plain click
+// keeps the in-app editor.
+const wantsVSCode = (event: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+}): boolean => event.metaKey || event.ctrlKey;
+
 // Extract plain text from link children so a reference rendered only as link
 // text (e.g. `[src/foo.ts]()` with an empty href) can still be opened.
 const childrenToText = (children: React.ReactNode): string => {
@@ -55,9 +74,12 @@ type CodeBlockProps = {
   inline?: boolean;
   className?: string;
   children?: React.ReactNode;
+  // Present only when rendered inside Markdown (not the raw component map), so
+  // path-like inline code can open in the editor / VS Code on click.
+  onOpenFileRef?: (fileRef: string, viaVSCode: boolean) => void;
 };
 
-const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockProps) => {
+const CodeBlock = ({ node, inline, className, children, onOpenFileRef, ...props }: CodeBlockProps) => {
   const { t } = useTranslation('chat');
   const [copied, setCopied] = useState(false);
   const raw = Array.isArray(children) ? children.join('') : String(children ?? '');
@@ -66,6 +88,34 @@ const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockPro
   const shouldInline = inlineDetected || !looksMultiline;
 
   if (shouldInline) {
+    // Path-like inline code (`src/foo.ts:42`) becomes a link: plain click opens
+    // the in-app editor, ⌘/Ctrl-click opens VS Code. Everything else — dotted
+    // identifiers, flags, prose — stays as plain inline code.
+    if (onOpenFileRef && inlineCodeLooksLikePath(raw)) {
+      const fileRef = raw.trim();
+      return (
+        <code
+          role="link"
+          tabIndex={0}
+          title="Click to open in editor · ⌘/Ctrl-click to open in VS Code"
+          className={`cursor-pointer whitespace-pre-wrap break-words rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 font-mono text-[0.9em] text-blue-600 hover:underline dark:border-gray-700 dark:bg-gray-800/60 dark:text-blue-400 ${className || ''
+            }`}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenFileRef(fileRef, wantsVSCode(event));
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onOpenFileRef(fileRef, wantsVSCode(event));
+            }
+          }}
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    }
     return (
       <code
         className={`whitespace-pre-wrap break-words rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 font-mono text-[0.9em] text-gray-900 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-100 ${className || ''
@@ -178,11 +228,26 @@ export function Markdown({ children, className }: MarkdownProps) {
   const content = normalizeInlineCodeFences(String(children ?? ''));
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
-  const { openFileInEditor } = usePaletteOps();
+  const { openFileInEditor, openFileInVSCode } = usePaletteOps();
+
+  // ⌘/Ctrl-click opens VS Code; plain click keeps the in-app editor. The line
+  // suffix is stripped for the in-app editor but kept for VS Code so it jumps
+  // to the referenced line.
+  const openFileRef = useCallback(
+    (fileRef: string, viaVSCode: boolean) => {
+      if (viaVSCode) {
+        openFileInVSCode(fileRef);
+      } else {
+        openFileInEditor(stripLineSuffix(fileRef));
+      }
+    },
+    [openFileInEditor, openFileInVSCode],
+  );
 
   const components = useMemo(
     () => ({
       ...markdownComponents,
+      code: (codeProps: CodeBlockProps) => <CodeBlock {...codeProps} onOpenFileRef={openFileRef} />,
       a: ({ href, children: linkChildren }: { href?: string; children?: React.ReactNode }) => {
         // Prefer the href when it is a real path; otherwise fall back to the
         // link text, since models often emit `[src/foo.ts]()` with an empty href.
@@ -194,9 +259,10 @@ export function Markdown({ children, className }: MarkdownProps) {
             <a
               href={href || fileRef}
               className="cursor-pointer text-blue-600 hover:underline dark:text-blue-400"
+              title="Click to open in editor · ⌘/Ctrl-click to open in VS Code"
               onClick={(event) => {
                 event.preventDefault();
-                openFileInEditor(stripLineSuffix(fileRef));
+                openFileRef(fileRef, wantsVSCode(event));
               }}
             >
               {linkChildren}
@@ -216,7 +282,7 @@ export function Markdown({ children, className }: MarkdownProps) {
         );
       },
     }),
-    [openFileInEditor],
+    [openFileRef],
   );
 
   return (

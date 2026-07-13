@@ -30,6 +30,7 @@ export interface ProjectSession {
   lastActivity?: string;
   messageCount?: number;
   starred_at?: string | null;
+  jsonlPath?: string | null;
   provider?: LLMProvider;
   __provider?: LLMProvider;
   // Tags the session with the owning project's DB `projectId` so UI handlers

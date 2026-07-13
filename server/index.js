@@ -336,6 +336,12 @@ const expandWorkspacePath = (inputPath) => {
     return inputPath;
 };
 
+// Exposes the server's home directory so the client can expand `~/...` file
+// references (e.g. in-chat paths) to absolute paths before opening them.
+app.get('/api/system/home', authenticateToken, (req, res) => {
+    res.json({ homedir: os.homedir() });
+});
+
 // Browse filesystem endpoint for project suggestions - uses existing getFileTree
 app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
     try {

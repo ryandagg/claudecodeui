@@ -10,6 +10,7 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
+import { useInputHistory } from '../hooks/useInputHistory';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useShortcutHandler } from '../../../hooks/useKeyboardShortcuts';
 
@@ -149,9 +150,13 @@ function ChatInterface({
     onNavigateToSession?.(sessionId);
   }, [setCurrentSessionId, onSessionEstablished, onNavigateToSession]);
 
+  // Shell-style up/down prompt history over this session's user messages.
+  const { handleHistoryKeyDown, resetHistory, bindSetInput } = useInputHistory(chatMessages);
+
   const {
     input,
     setInput,
+    inputValueRef,
     textareaRef,
     inputHighlightRef,
     isTextareaExpanded,
@@ -211,6 +216,8 @@ function ChatInterface({
     tokenBudget,
     sendMessage,
     sendByCtrlEnter,
+    onHistoryKeyDown: handleHistoryKeyDown,
+    onHistoryReset: resetHistory,
     onSessionProcessing,
     onSessionEstablished: handleSessionEstablished,
     onInputFocusChange,
@@ -221,6 +228,10 @@ function ChatInterface({
     setIsUserScrolledUp,
     setPendingPermissionRequests,
   });
+
+  // Bind the composer's setInput to the history hook so ArrowUp/Down can write
+  // to the input. This breaks the circular dependency between the two hooks.
+  bindSetInput(setInput, inputValueRef);
 
   // On WebSocket reconnect, re-fetch the current session's messages from the
   // server so missed streaming events are shown, then re-subscribe — the
@@ -433,6 +444,7 @@ function ChatInterface({
           })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
+          sessionJsonlPath={selectedSession?.jsonlPath ?? null}
         />
       </div>
 

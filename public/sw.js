@@ -88,7 +88,8 @@ self.addEventListener('push', event => {
     badge: '/logo-128.png',
     data: payload.data || {},
     tag: payload.data?.tag || `${payload.data?.sessionId || 'global'}:${payload.data?.code || 'default'}`,
-    renotify: true
+    renotify: true,
+    requireInteraction: true
   };
 
   event.waitUntil(

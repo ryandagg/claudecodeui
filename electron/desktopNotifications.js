@@ -314,6 +314,7 @@ export class DesktopNotificationsController {
       body: payload.body || '',
       icon: this.getIconPath?.(),
       silent: false,
+      timeoutType: 'never',
     });
 
     notification.on('click', () => {

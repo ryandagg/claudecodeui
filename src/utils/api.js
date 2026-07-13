@@ -55,7 +55,13 @@ export const api = {
   // the DB-assigned `projectId`; parameter names reflect that for clarity.
   // Server home directory, used client-side to expand `~/...` file references.
   systemHome: () => authenticatedFetch('/api/system/home'),
-  projects: () => authenticatedFetch('/api/projects'),
+  projects: ({ sessionsLimit, skipSync } = {}) => {
+    const params = new URLSearchParams();
+    if (sessionsLimit != null) params.set('sessionsLimit', String(sessionsLimit));
+    if (skipSync) params.set('skipSync', '1');
+    const qs = params.toString();
+    return authenticatedFetch(`/api/projects${qs ? `?${qs}` : ''}`);
+  },
   archivedProjects: () => authenticatedFetch('/api/projects/archived'),
   projectSessions: (projectId, { limit = 20, offset = 0 } = {}) => {
     const params = new URLSearchParams();

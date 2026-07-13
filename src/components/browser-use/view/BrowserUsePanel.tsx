@@ -359,7 +359,7 @@ export default function BrowserUsePanel({ isVisible, onShowSettings }: BrowserUs
               variant="ghost"
               size="sm"
               className="h-7 w-7 p-0"
-              onClick={() => onShowSettings('browser')}
+              onClick={() => onShowSettings()}
               title="Open Browser settings"
               aria-label="Open Browser settings"
             >

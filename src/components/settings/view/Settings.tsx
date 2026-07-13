@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../../shared/view/ui';
+import { useEscapeClose } from '../../../hooks/useEscapeClose';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
 import SessionsSettingsTab from '../view/tabs/SessionsSettingsTab';
@@ -22,6 +23,7 @@ type DesktopNotificationsState = {
 };
 
 function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps) {
+  useEscapeClose(isOpen, onClose);
   const { t } = useTranslation('settings');
   const desktopNotificationsBridge = useMemo(() => (
     typeof window === 'undefined'

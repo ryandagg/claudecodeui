@@ -7,6 +7,7 @@ import { ReleaseInfo } from "../../../types/sharedTypes";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import type { InstallMode } from "../../../hooks/useVersionCheck";
 import { IS_PLATFORM } from "../../../constants/config";
+import { useEscapeClose } from "../../../hooks/useEscapeClose";
 
 interface VersionUpgradeModalProps {
     isOpen: boolean;
@@ -27,6 +28,7 @@ export function VersionUpgradeModal({
     latestVersion,
     installMode
 }: VersionUpgradeModalProps) {
+    useEscapeClose(isOpen, onClose);
     const { t } = useTranslation('common');
     const upgradeCommand = installMode === 'npm'
         ? t('versionUpdate.npmUpgradeCommand')

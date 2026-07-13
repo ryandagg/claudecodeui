@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom';
 import { AlertTriangle, EyeOff, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
+import { useEscapeClose } from '../../../../hooks/useEscapeClose';
 import Settings from '../../../settings/view/Settings';
 import VersionUpgradeModal from '../../../version-upgrade/view';
 import type { Project } from '../../../../types/app';
@@ -70,6 +71,9 @@ export default function SidebarModals({
   installMode,
   t,
 }: SidebarModalsProps) {
+  useEscapeClose(Boolean(deleteConfirmation), onCancelDeleteProject);
+  useEscapeClose(Boolean(sessionDeleteConfirmation), onCancelDeleteSession);
+
   // Settings expects project identity/path fields to be present for dropdown labels and local-scope MCP config.
   const settingsProjects = useMemo(
     () => projects.map(normalizeProjectForSettings),

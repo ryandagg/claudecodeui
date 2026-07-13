@@ -4,6 +4,7 @@ import type { Extension } from '@codemirror/state';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useEscapeClose } from '../../../hooks/useEscapeClose';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
 import { useCodeEditorDocument } from '../hooks/useCodeEditorDocument';
 import { useCodeEditorSettings } from '../hooks/useCodeEditorSettings';
@@ -39,6 +40,7 @@ export default function CodeEditor({
   onToggleExpand = null,
   onPopOut = null,
 }: CodeEditorProps) {
+  useEscapeClose(true, onClose);
   const { t } = useTranslation('codeEditor');
   const paletteOps = usePaletteOps();
   const [isFullscreen, setIsFullscreen] = useState(false);

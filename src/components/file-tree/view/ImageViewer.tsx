@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '../../../shared/view/ui';
+import { useEscapeClose } from '../../../hooks/useEscapeClose';
 import { authenticatedFetch } from '../../../utils/api';
 import type { FileTreeImageSelection } from '../types/types';
 
@@ -10,6 +11,7 @@ type ImageViewerProps = {
 };
 
 export default function ImageViewer({ file, onClose }: ImageViewerProps) {
+  useEscapeClose(true, onClose);
   const imagePath = `/api/projects/${file.projectId}/files/content?path=${encodeURIComponent(file.path)}`;
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

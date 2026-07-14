@@ -43,6 +43,7 @@ type SessionUpsertedEvent = ServerEvent & {
 
 type FetchProjectsOptions = {
   showLoadingState?: boolean;
+  skipSync?: boolean;
 };
 
 type RegisterOptimisticSessionArgs = {
@@ -405,12 +406,12 @@ export function useProjectsState({
   const activeSessionsRef = useRef(activeSessions);
   activeSessionsRef.current = activeSessions;
 
-  const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
+  const fetchProjects = useCallback(async ({ showLoadingState = true, skipSync = false }: FetchProjectsOptions = {}) => {
     try {
       if (showLoadingState) {
         setIsLoadingProjects(true);
       }
-      const response = await api.projects();
+      const response = await api.projects({ sessionsLimit: 10, skipSync });
       const projectData = (await response.json()) as Project[];
 
       setProjects((prevProjects) => {
@@ -436,7 +437,8 @@ export function useProjectsState({
 
   const refreshProjectsSilently = useCallback(async () => {
     // Keep chat view stable while still syncing sidebar/session metadata in background.
-    await fetchProjects({ showLoadingState: false });
+    // Skip sync since the filesystem watcher handles incremental updates.
+    await fetchProjects({ showLoadingState: false, skipSync: true });
   }, [fetchProjects]);
 
   const registerOptimisticSession = useCallback(({
@@ -829,7 +831,7 @@ export function useProjectsState({
 
   const handleSidebarRefresh = useCallback(async () => {
     try {
-      const response = await api.projects();
+      const response = await api.projects({ sessionsLimit: 10 });
       const freshProjects = (await response.json()) as Project[];
       const projectsWithTaskMaster = mergeTaskMasterCache(freshProjects, projects);
       const mergedProjects = mergeExpandedSessionPages(projects, projectsWithTaskMaster);

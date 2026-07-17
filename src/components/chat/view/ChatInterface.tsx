@@ -87,6 +87,10 @@ function ChatInterface({
     providerModelsRefreshing,
     hardRefreshProviderModels,
     selectProviderModel,
+    currentProviderEffort,
+    currentProviderEffortOptions,
+    setStoredProviderEffort,
+    resolvePermissionModeForProvider,
   } = useChatProviderState({
     selectedSession,
     selectedProject,
@@ -199,6 +203,9 @@ function ChatInterface({
     commandModalPayload,
     closeCommandModal,
     showCostModal,
+    queuedDraft,
+    editQueuedDraft,
+    deleteQueuedDraft,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -211,6 +218,8 @@ function ChatInterface({
     codexModel,
     geminiModel,
     opencodeModel,
+    currentProviderEffort,
+    resolvePermissionModeForProvider,
     isLoading: isProcessing,
     canAbortSession,
     tokenBudget,
@@ -299,6 +308,8 @@ function ChatInterface({
     handlePermissionDecision,
   }), [pendingPermissionRequests, handlePermissionDecision]);
 
+  const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
+
   if (!selectedProject) {
     const selectedProviderLabel =
       provider === 'cursor'
@@ -334,6 +345,7 @@ function ChatInterface({
           onTouchMove={handleScroll}
           isLoadingSessionMessages={isLoadingSessionMessages}
           isProcessing={isProcessing}
+          hasActivityIndicator={hasActivityIndicator}
           chatMessages={chatMessages}
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
@@ -386,6 +398,9 @@ function ChatInterface({
           onAbortSession={handleAbortSession}
           permissionMode={permissionMode}
           onModeSwitch={cyclePermissionMode}
+          effort={currentProviderEffort}
+          availableEffortOptions={currentProviderEffortOptions}
+          onSelectEffort={(nextEffort) => setStoredProviderEffort(provider, nextEffort)}
           tokenBudget={tokenBudget}
           onShowTokenUsage={showCostModal}
           slashCommandsCount={slashCommandsCount}
@@ -445,6 +460,9 @@ function ChatInterface({
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
           sessionJsonlPath={selectedSession?.jsonlPath ?? null}
+          queuedDraft={queuedDraft}
+          onEditQueuedDraft={editQueuedDraft}
+          onDeleteQueuedDraft={deleteQueuedDraft}
         />
       </div>
 

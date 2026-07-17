@@ -14,7 +14,13 @@ import { useDropzone } from 'react-dropzone';
 import { authenticatedFetch } from '../../../utils/api';
 import type { MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
-import { safeLocalStorage } from '../utils/chatStorage';
+import {
+  clearQueuedMessage,
+  readQueuedMessage,
+  safeLocalStorage,
+  writeQueuedMessage,
+  type QueuedSendOptions,
+} from '../utils/chatStorage';
 import type {
   ChatMessage,
   PendingPermissionRequest,
@@ -39,6 +45,8 @@ interface UseChatComposerStateArgs {
   codexModel: string;
   geminiModel: string;
   opencodeModel: string;
+  currentProviderEffort: string;
+  resolvePermissionModeForProvider: (provider: LLMProvider, requestedMode: PermissionMode | string) => PermissionMode;
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -141,6 +149,18 @@ export type CommandModalPayload = {
   data: HelpCommandData | ModelCommandData | CostCommandData | StatusCommandData;
 };
 
+export type QueuedDraft = {
+  content: string;
+  images: File[];
+  options?: QueuedSendOptions;
+  sessionId: string;
+};
+
+const restoreQueuedDraft = (sessionKey: string): QueuedDraft | null => {
+  const saved = readQueuedMessage(sessionKey);
+  return saved ? { content: saved.content, images: [], options: saved.options, sessionId: sessionKey } : null;
+};
+
 const createFakeSubmitEvent = () => {
   return { preventDefault: () => undefined } as unknown as FormEvent<HTMLFormElement>;
 };
@@ -175,6 +195,8 @@ export function useChatComposerState({
   codexModel,
   geminiModel,
   opencodeModel,
+  currentProviderEffort,
+  resolvePermissionModeForProvider,
   isLoading,
   canAbortSession,
   tokenBudget,
@@ -215,6 +237,13 @@ export function useChatComposerState({
   >(null);
   const inputValueRef = useRef(input);
   const selectedProjectId = selectedProject?.projectId;
+  const sessionKey = selectedSession?.id || currentSessionId || null;
+
+  const [queuedDraft, setQueuedDraft] = useState<QueuedDraft | null>(() => {
+    if (typeof window === 'undefined' || !sessionKey) return null;
+    return restoreQueuedDraft(sessionKey);
+  });
+  const queuedDraftSessionRef = useRef<string | null>(sessionKey);
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
@@ -555,13 +584,97 @@ export function useChatComposerState({
     noKeyboard: true,
   });
 
+  const buildSendOptions = useCallback((): QueuedSendOptions => {
+    const getToolsSettings = () => {
+      // Claude reads its allow/deny from ~/.claude/settings.json server-side (the single
+      // source), so the app sends no Claude tool lists. Other providers keep their own stores.
+      if (provider === 'claude') {
+        return { allowedTools: [], disallowedTools: [], skipPermissions: false };
+      }
+      try {
+        const settingsKey =
+          provider === 'cursor'
+            ? 'cursor-tools-settings'
+            : provider === 'codex'
+              ? 'codex-settings'
+              : provider === 'gemini'
+                ? 'gemini-settings'
+                : provider === 'opencode'
+                  ? 'opencode-settings'
+                : 'claude-settings';
+        const savedSettings = safeLocalStorage.getItem(settingsKey);
+        if (savedSettings) {
+          return JSON.parse(savedSettings);
+        }
+      } catch (error) {
+        console.error('Error loading tools settings:', error);
+      }
+
+      return {
+        allowedTools: [],
+        disallowedTools: [],
+        skipPermissions: false,
+      };
+    };
+
+    const toolsSettings = getToolsSettings();
+    const model =
+      provider === 'cursor'
+        ? cursorModel
+        : provider === 'codex'
+          ? codexModel
+          : provider === 'gemini'
+            ? geminiModel
+            : provider === 'opencode'
+              ? opencodeModel
+              : claudeModel;
+
+    return {
+      model,
+      effort: currentProviderEffort,
+      permissionMode: resolvePermissionModeForProvider(provider, permissionMode),
+      toolsSettings,
+      skipPermissions: toolsSettings?.skipPermissions || false,
+    };
+  }, [
+    claudeModel,
+    codexModel,
+    currentProviderEffort,
+    cursorModel,
+    geminiModel,
+    opencodeModel,
+    permissionMode,
+    provider,
+    resolvePermissionModeForProvider,
+  ]);
+
   const handleSubmit = useCallback(
     async (
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
     ) => {
       event.preventDefault();
       const currentInput = inputValueRef.current;
-      if (!currentInput.trim() || isLoading || !selectedProject) {
+      if (!currentInput.trim() || !selectedProject) {
+        return;
+      }
+
+      if (isLoading) {
+        setQueuedDraft({
+          content: currentInput,
+          images: attachedImages,
+          options: buildSendOptions(),
+          sessionId: sessionKey!,
+        });
+        setInput('');
+        inputValueRef.current = '';
+        setAttachedImages([]);
+        setUploadingImages(new Map());
+        setImageErrors(new Map());
+        resetCommandMenuState();
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
         return;
       }
 
@@ -714,49 +827,7 @@ export function useChatComposerState({
       setIsUserScrolledUp(false);
       setTimeout(() => scrollToBottom(), 100);
 
-      const getToolsSettings = () => {
-        // Claude reads its allow/deny from ~/.claude/settings.json server-side (the single
-        // source), so the app sends no Claude tool lists. Other providers keep their own stores.
-        if (provider === 'claude') {
-          return { allowedTools: [], disallowedTools: [], skipPermissions: false };
-        }
-        try {
-          const settingsKey =
-            provider === 'cursor'
-              ? 'cursor-tools-settings'
-              : provider === 'codex'
-                ? 'codex-settings'
-                : provider === 'gemini'
-                  ? 'gemini-settings'
-                  : provider === 'opencode'
-                    ? 'opencode-settings'
-                  : 'claude-settings';
-          const savedSettings = safeLocalStorage.getItem(settingsKey);
-          if (savedSettings) {
-            return JSON.parse(savedSettings);
-          }
-        } catch (error) {
-          console.error('Error loading tools settings:', error);
-        }
-
-        return {
-          allowedTools: [],
-          disallowedTools: [],
-          skipPermissions: false,
-        };
-      };
-
-      const toolsSettings = getToolsSettings();
-      const model =
-        provider === 'cursor'
-          ? cursorModel
-          : provider === 'codex'
-            ? codexModel
-            : provider === 'gemini'
-              ? geminiModel
-              : provider === 'opencode'
-                ? opencodeModel
-                : claudeModel;
+      const sendOptions = buildSendOptions();
 
       // One message shape for every provider. The backend resolves the
       // provider, project path, and provider-native resume id from the
@@ -766,12 +837,7 @@ export function useChatComposerState({
         sessionId: targetSessionId,
         content: messageContent,
         options: {
-          model,
-          // Codex has no plan mode; downgrade rather than sending an
-          // unsupported value to its runtime.
-          permissionMode: provider === 'codex' && permissionMode === 'plan' ? 'default' : permissionMode,
-          toolsSettings,
-          skipPermissions: toolsSettings?.skipPermissions || false,
+          ...sendOptions,
           sessionSummary,
           images: uploadedImages,
         },
@@ -794,17 +860,12 @@ export function useChatComposerState({
     [
       selectedSession,
       attachedImages,
-      claudeModel,
-      codexModel,
+      buildSendOptions,
       currentSessionId,
-      cursorModel,
       executeCommand,
-      geminiModel,
-      opencodeModel,
       isLoading,
       onSessionProcessing,
       onSessionEstablished,
-      permissionMode,
       provider,
       resetCommandMenuState,
       scrollToBottom,
@@ -830,6 +891,86 @@ export function useChatComposerState({
     inputValueRef.current = next;
     if (send) handleSubmitRef.current?.(createFakeSubmitEvent());
   }, [setInput]);
+
+  // Auto-flush queued draft when the current turn finishes. Track prev value so we
+  // only fire on the true → false transition; setting the input synchronously via the
+  // ref lets handleSubmit read the queued text on the next tick without a re-render.
+  const wasLoadingRef = useRef(isLoading);
+  const prevSessionKeyRef = useRef(sessionKey);
+  useEffect(() => {
+    const wasLoading = wasLoadingRef.current;
+    const prevSession = prevSessionKeyRef.current;
+    wasLoadingRef.current = isLoading;
+    prevSessionKeyRef.current = sessionKey;
+
+    // A session switch causes an apparent isLoading true→false transition
+    // (the new session isn't processing). Only flush when the session didn't change
+    // AND the draft belongs to this session.
+    if (prevSession !== sessionKey) return;
+    if (!wasLoading || isLoading) return;
+    if (!queuedDraft) return;
+    if (queuedDraft.sessionId !== sessionKey) return;
+    const draft = queuedDraft;
+    setQueuedDraft(null);
+    setInput(draft.content);
+    inputValueRef.current = draft.content;
+    if (draft.images.length > 0) {
+      setAttachedImages(draft.images);
+    }
+    handleSubmitRef.current?.(createFakeSubmitEvent());
+  }, [isLoading, queuedDraft, sessionKey]);
+
+  const editQueuedDraft = useCallback(() => {
+    if (!queuedDraft) return;
+    const draft = queuedDraft;
+    setQueuedDraft(null);
+    const currentInput = inputValueRef.current;
+    const merged = currentInput.trim()
+      ? `${currentInput}${currentInput.endsWith('\n') ? '' : '\n'}${draft.content}`
+      : draft.content;
+    setInput(merged);
+    inputValueRef.current = merged;
+    if (draft.images.length > 0) {
+      setAttachedImages((previous) => [...previous, ...draft.images].slice(0, 5));
+    }
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      const caret = merged.length;
+      textarea.setSelectionRange(caret, caret);
+    });
+  }, [queuedDraft]);
+
+  const deleteQueuedDraft = useCallback(() => {
+    setQueuedDraft(null);
+  }, []);
+
+  // When the user switches sessions, swap the visible queued draft to the one
+  // stored for the newly selected session (or clear it if none is stashed).
+  // This MUST run before the persist effect so the persist effect never writes
+  // session A's draft under session B's key.
+  useEffect(() => {
+    if (queuedDraftSessionRef.current === sessionKey) return;
+    queuedDraftSessionRef.current = sessionKey;
+    if (!sessionKey) {
+      setQueuedDraft(null);
+      return;
+    }
+    setQueuedDraft(restoreQueuedDraft(sessionKey));
+  }, [sessionKey]);
+
+  // Persist the queued draft to localStorage so a reload doesn't drop the user's
+  // stashed follow-up. Always persist under the draft's own session id so a
+  // concurrent session switch never writes a stale draft to the wrong key.
+  useEffect(() => {
+    if (!sessionKey) return;
+    if (queuedDraft && queuedDraft.content.trim()) {
+      writeQueuedMessage(queuedDraft.sessionId, { content: queuedDraft.content, options: queuedDraft.options });
+    } else {
+      clearQueuedMessage(sessionKey);
+    }
+  }, [queuedDraft, sessionKey]);
 
   useEffect(() => {
     inputValueRef.current = input;
@@ -1090,5 +1231,8 @@ export function useChatComposerState({
     commandModalPayload,
     closeCommandModal,
     showCostModal,
+    queuedDraft,
+    editQueuedDraft,
+    deleteQueuedDraft,
   };
 }

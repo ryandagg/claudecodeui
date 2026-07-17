@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useMemo } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type {
   ChangeEvent,
   ClipboardEvent,
@@ -11,12 +12,26 @@ import type {
   RefObject,
   TouchEvent,
 } from 'react';
-import { ImageIcon, MessageSquareIcon, XIcon, ArrowDownIcon, Loader2, CopyIcon, CheckIcon } from 'lucide-react';
+import {
+  ImageIcon,
+  MessageSquareIcon,
+  XIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
+  Loader2,
+  CopyIcon,
+  CheckIcon,
+  ChevronDown,
+  Check,
+} from 'lucide-react';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
+import type { QueuedDraft } from '../../hooks/useChatComposerState';
+import type { ProviderModelOption } from '../../../../types/app';
+import { DEFAULT_EFFORT_VALUE } from '../../constants/providerEffort';
 import {
   PromptInput,
   PromptInputHeader,
@@ -34,6 +49,7 @@ import ImageAttachment from './ImageAttachment';
 import VoiceInputButton from './VoiceInputButton';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import TokenUsageSummary from './TokenUsageSummary';
+import QueuedMessageCard from './QueuedMessageCard';
 
 interface MentionableFile {
   name: string;
@@ -61,6 +77,9 @@ interface ChatComposerProps {
   onAbortSession: () => void;
   permissionMode: PermissionMode | string;
   onModeSwitch: () => void;
+  effort: string;
+  availableEffortOptions: NonNullable<ProviderModelOption['effort']>['values'];
+  onSelectEffort: (effort: string) => void;
   tokenBudget: Record<string, unknown> | null;
   onShowTokenUsage: () => void;
   slashCommandsCount: number;
@@ -105,6 +124,9 @@ interface ChatComposerProps {
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
   sessionJsonlPath?: string | null;
+  queuedDraft: QueuedDraft | null;
+  onEditQueuedDraft: () => void;
+  onDeleteQueuedDraft: () => void;
 }
 
 export default function ChatComposer({
@@ -115,6 +137,9 @@ export default function ChatComposer({
   onAbortSession,
   permissionMode,
   onModeSwitch,
+  effort,
+  availableEffortOptions,
+  onSelectEffort,
   tokenBudget,
   onShowTokenUsage,
   slashCommandsCount,
@@ -159,10 +184,77 @@ export default function ChatComposer({
   isTextareaExpanded,
   sendByCtrlEnter,
   sessionJsonlPath,
+  queuedDraft,
+  onEditQueuedDraft,
+  onDeleteQueuedDraft,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const [pathCopied, setPathCopied] = useState(false);
   const pathCopyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isEffortMenuOpen, setIsEffortMenuOpen] = useState(false);
+  const [effortMenuPosition, setEffortMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const effortButtonRef = useRef<HTMLButtonElement | null>(null);
+  const effortMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const computeEffortMenuPosition = useCallback(() => {
+    const button = effortButtonRef.current;
+    if (!button) return null;
+    const rect = button.getBoundingClientRect();
+    // Render menu above the button. Height budget is estimated; the menu
+    // scrolls if it overflows.
+    const menuHeightBudget = Math.min(240, 44 + availableEffortOptions.length * 32);
+    return {
+      top: rect.top - menuHeightBudget - 8,
+      left: rect.left,
+    };
+  }, [availableEffortOptions.length]);
+
+  const openEffortMenu = useCallback(() => {
+    const pos = computeEffortMenuPosition();
+    if (pos) setEffortMenuPosition(pos);
+    setIsEffortMenuOpen(true);
+  }, [computeEffortMenuPosition]);
+
+  const closeEffortMenu = useCallback(() => {
+    setIsEffortMenuOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!isEffortMenuOpen) return;
+    const handleMouseDown = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        effortMenuRef.current?.contains(target) ||
+        effortButtonRef.current?.contains(target)
+      ) {
+        return;
+      }
+      closeEffortMenu();
+    };
+    const handleKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeEffortMenu();
+      }
+    };
+    const handleReposition = () => {
+      const pos = computeEffortMenuPosition();
+      if (pos) setEffortMenuPosition(pos);
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKey);
+    window.addEventListener('scroll', handleReposition, true);
+    window.addEventListener('resize', handleReposition);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('scroll', handleReposition, true);
+      window.removeEventListener('resize', handleReposition);
+    };
+  }, [closeEffortMenu, computeEffortMenuPosition, isEffortMenuOpen]);
+
+  const effortLabel = effort === DEFAULT_EFFORT_VALUE
+    ? t('input.effort.default', { defaultValue: 'default' })
+    : effort;
   const handleCopySessionPath = useCallback(() => {
     if (!sessionJsonlPath) return;
     void navigator.clipboard.writeText(sessionJsonlPath).then(() => {
@@ -216,6 +308,9 @@ export default function ChatComposer({
 
   // Hide the thinking/status bar while any permission request is pending
   const hasPendingPermissions = pendingPermissionRequests.length > 0;
+
+  const hasQueuedDraft = Boolean(queuedDraft);
+  const canQueueDraft = isLoading && Boolean(input.trim());
 
   return (
     <div className="chat-composer-shell relative z-50 flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
@@ -281,6 +376,15 @@ export default function ChatComposer({
           isOpen={isCommandMenuOpen}
           frequentCommands={frequentCommands}
         />
+
+        {queuedDraft && (
+          <QueuedMessageCard
+            content={queuedDraft.content}
+            imageCount={queuedDraft.images.length}
+            onEdit={onEditQueuedDraft}
+            onDelete={onDeleteQueuedDraft}
+          />
+        )}
 
         <PromptInput
           onSubmit={onSubmit as (event: FormEvent<HTMLFormElement>) => void}
@@ -400,6 +504,88 @@ export default function ChatComposer({
               </div>
             </button>
 
+            {availableEffortOptions.length > 0 && (
+              <>
+                <button
+                  ref={effortButtonRef}
+                  type="button"
+                  onClick={() => {
+                    if (isEffortMenuOpen) {
+                      closeEffortMenu();
+                    } else {
+                      openEffortMenu();
+                    }
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-border/60 bg-muted/50 p-2 text-xs font-medium text-muted-foreground transition-all duration-200 hover:bg-muted sm:px-2.5 sm:py-1"
+                  title={t('input.effort.tooltip', { defaultValue: 'Change reasoning effort' })}
+                >
+                  <span className="whitespace-nowrap">
+                    {t('input.effort.label', { defaultValue: 'Effort' })}
+                    {': '}
+                    {effortLabel}
+                  </span>
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+                {isEffortMenuOpen && effortMenuPosition && createPortal(
+                  <div
+                    ref={effortMenuRef}
+                    role="menu"
+                    style={{
+                      position: 'fixed',
+                      top: effortMenuPosition.top,
+                      left: effortMenuPosition.left,
+                      zIndex: 60,
+                    }}
+                    className="max-h-60 min-w-40 overflow-y-auto rounded-xl border border-border/50 bg-card/95 py-1 shadow-lg backdrop-blur-md"
+                  >
+                    <button
+                      key={DEFAULT_EFFORT_VALUE}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={effort === DEFAULT_EFFORT_VALUE}
+                      onClick={() => {
+                        onSelectEffort(DEFAULT_EFFORT_VALUE);
+                        closeEffortMenu();
+                      }}
+                      className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                        effort === DEFAULT_EFFORT_VALUE
+                          ? 'bg-primary/10 text-primary'
+                          : 'text-foreground hover:bg-accent/50'
+                      }`}
+                    >
+                      <span>{t('input.effort.default', { defaultValue: 'default' })}</span>
+                      {effort === DEFAULT_EFFORT_VALUE && <Check className="h-3 w-3" />}
+                    </button>
+                    {availableEffortOptions.map((option) => {
+                      const selected = option.value === effort;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          onClick={() => {
+                            onSelectEffort(option.value);
+                            closeEffortMenu();
+                          }}
+                          className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                            selected
+                              ? 'bg-primary/10 text-primary'
+                              : 'text-foreground hover:bg-accent/50'
+                          }`}
+                          title={option.description}
+                        >
+                          <span>{option.value}</span>
+                          {selected && <Check className="h-3 w-3" />}
+                        </button>
+                      );
+                    })}
+                  </div>,
+                  document.body,
+                )}
+              </>
+            )}
+
             <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
 
             <PromptInputButton
@@ -456,27 +642,51 @@ export default function ChatComposer({
             ) : (
               <div
                 className={`hidden text-xs text-muted-foreground/50 transition-opacity duration-200 lg:block ${
-                  input.trim() ? 'opacity-0' : 'opacity-100'
+                  input.trim() ? (canQueueDraft ? 'opacity-100' : 'opacity-0') : 'opacity-100'
                 }`}
               >
-                {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
+                {canQueueDraft
+                  ? t('input.queue.hint', { defaultValue: 'Enter to queue your next message' })
+                  : sendByCtrlEnter
+                    ? t('input.hintText.ctrlEnter')
+                    : t('input.hintText.enter')}
               </div>
             )}
             <PromptInputSubmit
               onClick={
-                isLoading
-                  ? onAbortSession
-                  : isRecording
-                    ? (e: MouseEvent<HTMLButtonElement>) => {
-                        e.preventDefault();
-                        voiceStop({ send: true });
-                      }
-                    : undefined
+                canQueueDraft
+                  ? (e: MouseEvent<HTMLButtonElement>) => {
+                      e.preventDefault();
+                      onSubmit(e);
+                    }
+                  : isLoading
+                    ? onAbortSession
+                    : isRecording
+                      ? (e: MouseEvent<HTMLButtonElement>) => {
+                          e.preventDefault();
+                          voiceStop({ send: true });
+                        }
+                      : undefined
               }
-              disabled={isLoading ? false : isRecording ? false : isTranscribing ? true : !input.trim()}
+              disabled={
+                canQueueDraft
+                  ? hasQueuedDraft
+                  : isLoading
+                    ? false
+                    : isRecording
+                      ? false
+                      : isTranscribing
+                        ? true
+                        : !input.trim()
+              }
               className="h-10 w-10 sm:h-10 sm:w-10"
+              aria-label={canQueueDraft ? t('input.queue.queueSend', { defaultValue: 'Queue message' }) : undefined}
             >
-              {isTranscribing ? <Loader2 className="h-4 w-4 animate-spin" /> : undefined}
+              {canQueueDraft ? (
+                <ArrowUpIcon className="h-4 w-4" />
+              ) : isTranscribing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : undefined}
             </PromptInputSubmit>
           </div>
         </PromptInputFooter>

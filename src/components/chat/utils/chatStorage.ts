@@ -1,3 +1,12 @@
+export type QueuedSendOptions = Record<string, unknown>;
+
+export type StoredQueuedMessage = {
+  content: string;
+  options?: QueuedSendOptions;
+};
+
+export const queuedMessageKey = (sessionId: string) => `queued_message_${sessionId}`;
+
 export const safeLocalStorage = {
   setItem: (key: string, value: string) => {
     try {
@@ -38,3 +47,24 @@ export const safeLocalStorage = {
     }
   },
 };
+
+export function readQueuedMessage(sessionId: string): StoredQueuedMessage | null {
+  const raw = safeLocalStorage.getItem(queuedMessageKey(sessionId));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && typeof (parsed as StoredQueuedMessage).content === 'string') {
+      const { content, options } = parsed as StoredQueuedMessage;
+      return content.trim() ? { content, options } : null;
+    }
+  } catch { /* Legacy format: raw text */ }
+  return raw.trim() ? { content: raw } : null;
+}
+
+export function writeQueuedMessage(sessionId: string, message: StoredQueuedMessage): void {
+  safeLocalStorage.setItem(queuedMessageKey(sessionId), JSON.stringify(message));
+}
+
+export function clearQueuedMessage(sessionId: string): void {
+  safeLocalStorage.removeItem(queuedMessageKey(sessionId));
+}

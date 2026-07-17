@@ -623,9 +623,7 @@ export default function ChatComposer({
                 title={t('input.sessionPath.tooltip', {
                   defaultValue: 'Copy session transcript path for handoff to another agent',
                 })}
-                className={`hidden max-w-[46ch] items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-xs text-muted-foreground/50 transition-opacity duration-200 hover:text-muted-foreground/80 lg:flex ${
-                  input.trim() ? 'opacity-0' : 'opacity-100'
-                }`}
+                className="hidden max-w-[46ch] items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-xs text-muted-foreground/50 transition-opacity duration-200 hover:text-muted-foreground/80 lg:flex"
               >
                 {pathCopied ? (
                   <CheckIcon className="h-3 w-3 shrink-0" />

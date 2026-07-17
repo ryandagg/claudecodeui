@@ -175,8 +175,9 @@ async function handleChatSend(
   } finally {
     // Safety net: a runtime that crashed (or resolved) without emitting its
     // terminal `complete` would otherwise leave the session stuck in
-    // "processing" forever on every connected client.
-    chatRunRegistry.completeRun(sessionId, { exitCode: 1 });
+    // "processing" forever on every connected client. The `ifStartedAt` guard
+    // prevents this from killing a newer run that replaced an aborted one.
+    chatRunRegistry.completeRun(sessionId, { exitCode: 1, ifStartedAt: run.startedAt });
   }
 }
 

@@ -308,14 +308,23 @@ export const chatRunRegistry = {
    * Emits a synthetic terminal `complete` if (and only if) the run is still
    * marked running. Used when a provider runtime throws or resolves without
    * having produced its own terminal event, and by the abort path.
+   *
+   * When `opts.ifStartedAt` is provided, the completion only fires if the
+   * current run's `startedAt` matches — preventing a stale finally-block from
+   * killing a newer run that replaced the aborted one.
    */
-  completeRun(appSessionId: string, opts: { exitCode: number; aborted?: boolean }): void {
+  completeRun(appSessionId: string, opts: { exitCode: number; aborted?: boolean; ifStartedAt?: number }): void {
     const run = runs.get(appSessionId);
     if (!run || run.status !== 'running') {
       return;
     }
 
-    run.writer.sendComplete(opts);
+    if (opts.ifStartedAt !== undefined && run.startedAt !== opts.ifStartedAt) {
+      return;
+    }
+
+    const { ifStartedAt: _, ...completeOpts } = opts;
+    run.writer.sendComplete(completeOpts);
   },
 
   /**

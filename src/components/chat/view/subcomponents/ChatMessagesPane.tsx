@@ -23,6 +23,7 @@ interface ChatMessagesPaneProps {
   isLoadingSessionMessages: boolean;
   /** True while the viewed session has an active provider run in flight. */
   isProcessing?: boolean;
+  hasActivityIndicator?: boolean;
   chatMessages: ChatMessage[];
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
@@ -73,6 +74,7 @@ function ChatMessagesPane({
   onTouchMove,
   isLoadingSessionMessages,
   isProcessing = false,
+  hasActivityIndicator = false,
   chatMessages,
   selectedSession,
   currentSessionId,
@@ -117,33 +119,24 @@ function ChatMessagesPane({
   selectedProject,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
-  const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
-  const allocatedKeysRef = useRef<Set<string>>(new Set());
+  const intrinsicKeyMapRef = useRef<Map<string, string>>(new Map());
   const generatedMessageKeyCounterRef = useRef(0);
-  const groupedVisibleMessages = useMemo(() => groupConsecutiveTools(visibleMessages), [visibleMessages]);
+  const groupedVisibleMessages = useMemo(() => groupConsecutiveTools(visibleMessages, Boolean(showThinking)), [visibleMessages, showThinking]);
 
-  // Keep keys stable across prepends so existing MessageComponent instances retain local state.
+  // Keep keys stable across message array recreations so existing component
+  // instances retain local state (e.g. collapsible open/closed).
   const getMessageKey = useCallback((message: ChatMessage) => {
-    const existingKey = messageKeyMapRef.current.get(message);
-    if (existingKey) {
-      return existingKey;
-    }
-
     const intrinsicKey = getIntrinsicMessageKey(message);
-    let candidateKey = intrinsicKey;
 
-    if (!candidateKey || allocatedKeysRef.current.has(candidateKey)) {
-      do {
-        generatedMessageKeyCounterRef.current += 1;
-        candidateKey = intrinsicKey
-          ? `${intrinsicKey}-${generatedMessageKeyCounterRef.current}`
-          : `message-generated-${generatedMessageKeyCounterRef.current}`;
-      } while (allocatedKeysRef.current.has(candidateKey));
+    if (intrinsicKey) {
+      const existing = intrinsicKeyMapRef.current.get(intrinsicKey);
+      if (existing) return existing;
+      intrinsicKeyMapRef.current.set(intrinsicKey, intrinsicKey);
+      return intrinsicKey;
     }
 
-    allocatedKeysRef.current.add(candidateKey);
-    messageKeyMapRef.current.set(message, candidateKey);
-    return candidateKey;
+    generatedMessageKeyCounterRef.current += 1;
+    return `message-generated-${generatedMessageKeyCounterRef.current}`;
   }, []);
 
   return (
@@ -151,7 +144,7 @@ function ChatMessagesPane({
       ref={scrollContainerRef}
       onWheel={onWheel}
       onTouchMove={onTouchMove}
-      className="chat-messages-pane relative min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-0 py-3 sm:space-y-4 sm:p-4"
+      className={`chat-messages-pane relative min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-0 pt-3 sm:space-y-4 sm:px-4 sm:pt-4 ${hasActivityIndicator ? 'pb-12 sm:pb-14' : 'pb-3 sm:pb-4'}`}
     >
       {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">

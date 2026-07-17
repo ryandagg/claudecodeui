@@ -411,17 +411,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
               </div>
             )}
 
-            {(shouldShowAssistantCopyControl || !isGrouped) && (
-              <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
-                {shouldShowAssistantCopyControl && (
-                  <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
-                )}
-                {shouldShowAssistantCopyControl && (
-                  <MessageSpeakControl content={assistantCopyContent} />
-                )}
-                {!isGrouped && <span>{formattedTime}</span>}
-              </div>
-            )}
+            <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
+              {shouldShowAssistantCopyControl && (
+                <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+              )}
+              {shouldShowAssistantCopyControl && (
+                <MessageSpeakControl content={assistantCopyContent} />
+              )}
+              <span>{formattedTime}</span>
+            </div>
           </div>
         </div>
       )}

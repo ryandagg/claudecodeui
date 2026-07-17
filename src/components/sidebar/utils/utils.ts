@@ -89,6 +89,25 @@ export const createSessionViewModel = (
 };
 
 export const HIDDEN_SESSION_STORAGE_KEY = 'hidden-session-patterns';
+export const HIDE_WORKTREE_SESSIONS_KEY = 'hide-worktree-sessions';
+
+export const getHideWorktreeSessions = (): boolean => {
+  return localStorage.getItem(HIDE_WORKTREE_SESSIONS_KEY) !== 'false';
+};
+
+export const setHideWorktreeSessions = (hide: boolean): void => {
+  localStorage.setItem(HIDE_WORKTREE_SESSIONS_KEY, String(hide));
+  hideWorktreeSessions = hide;
+  window.dispatchEvent(new StorageEvent('storage', { key: HIDE_WORKTREE_SESSIONS_KEY }));
+};
+
+let hideWorktreeSessions = getHideWorktreeSessions();
+
+const WORKTREE_PATH_PATTERN = /[\\/]worktrees[\\/]/;
+
+export const isWorktreeProject = (project: Project): boolean => {
+  return WORKTREE_PATH_PATTERN.test(project.fullPath || '');
+};
 
 export const getHiddenSessionPatterns = (): string[] => {
   try {

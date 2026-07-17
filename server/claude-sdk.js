@@ -42,6 +42,15 @@ const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEO
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
+function resolveClaudeEffort(model, effort, modelsDefinition = CLAUDE_FALLBACK_MODELS) {
+  const selectedModel = modelsDefinition?.OPTIONS?.find((option) => option.value === model) || null;
+  const allowedEfforts = selectedModel?.effort?.values
+    ?.map((value) => value.value) || [];
+  return typeof effort === 'string' && effort !== 'default' && allowedEfforts.includes(effort)
+    ? effort
+    : undefined;
+}
+
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -152,7 +161,7 @@ function matchesToolPermission(entry, toolName, input) {
  * @returns {Object} SDK-compatible options
  */
 function mapCliOptionsToSDK(options = {}) {
-  const { sessionId, cwd, toolsSettings, permissionMode } = options;
+  const { sessionId, cwd, toolsSettings, permissionMode, effort } = options;
 
   const sdkOptions = {};
 
@@ -204,6 +213,15 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.model = options.model;
   }
   // Model logged at query start below
+
+  const resolvedEffort = resolveClaudeEffort(
+    sdkOptions.model,
+    effort,
+    options.effortModels || CLAUDE_FALLBACK_MODELS,
+  );
+  if (resolvedEffort) {
+    sdkOptions.effort = resolvedEffort;
+  }
 
   // Map system prompt configuration
   sdkOptions.systemPrompt = {
@@ -527,10 +545,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
       options.model,
     );
 
+    let effortModels = CLAUDE_FALLBACK_MODELS;
+    try {
+      effortModels = (await providerModelsService.getProviderModels('claude')).models;
+    } catch (error) {
+      console.warn('[Claude SDK] Unable to load provider models for effort validation:', error);
+    }
+
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK({
       ...options,
       model: resolvedModel || options.model,
+      effortModels,
     });
 
     // Load MCP configuration
@@ -649,7 +675,11 @@ async function queryClaudeSDK(command, options = {}, ws) {
       return { behavior: 'deny', message: decision.message ?? 'User denied tool use' };
     };
 
-    // Set stream-close timeout for interactive tools (Query constructor reads it synchronously). Claude Agent SDK has a default of 5s and this overrides it
+    // Override stream-close timeout for the entire session lifetime (not just
+    // construction). Subagents spawned by the SDK during the async generator loop
+    // re-read this env var when they need to wait for permission approval — if
+    // it's already been restored to the previous value (e.g. undefined/5s default)
+    // their permission requests abort with "Stream closed" before the user can act.
     const prevStreamTimeout = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
     process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = '300000';
 
@@ -668,13 +698,6 @@ async function queryClaudeSDK(command, options = {}, ws) {
         prompt: finalCommand,
         options: sdkOptions
       });
-    }
-
-    // Restore immediately — Query constructor already captured the value
-    if (prevStreamTimeout !== undefined) {
-      process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
-    } else {
-      delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
     }
 
     // Track the query instance for abort capability
@@ -726,6 +749,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }
     }
 
+    // Restore stream-close timeout now that the session is done
+    if (prevStreamTimeout !== undefined) {
+      process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
+    } else {
+      delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+    }
+
     // Clean up session on completion
     if (capturedSessionId) {
       removeSession(capturedSessionId);
@@ -751,6 +781,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
   } catch (error) {
     console.error('SDK query error:', error);
+
+    // Restore stream-close timeout on error path
+    if (prevStreamTimeout !== undefined) {
+      process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
+    } else {
+      delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+    }
 
     // Clean up session on error
     if (capturedSessionId) {

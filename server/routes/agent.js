@@ -844,6 +844,9 @@ class ResponseCollector {
  */
 router.post('/', validateExternalApiKey, async (req, res) => {
   const { githubUrl, projectPath, message, provider = 'claude', model, githubToken, branchName, sessionId } = req.body;
+  const effort = typeof req.body.effort === 'string' && req.body.effort.trim()
+    ? req.body.effort.trim()
+    : undefined;
 
   // Parse stream and cleanup as booleans (handle string "true"/"false" from curl)
   const stream = req.body.stream === undefined ? true : (req.body.stream === true || req.body.stream === 'true');
@@ -954,6 +957,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         cwd: finalProjectPath,
         sessionId: sessionId || null,
         model: model,
+        effort,
         permissionMode: 'bypassPermissions' // Bypass all permissions for API calls
       }, writer);
 

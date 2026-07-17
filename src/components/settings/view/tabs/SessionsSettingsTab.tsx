@@ -3,9 +3,17 @@ import { Plus, Trash2 } from 'lucide-react';
 
 import SettingsCard from '../SettingsCard';
 import SettingsSection from '../SettingsSection';
-import { HIDDEN_SESSION_STORAGE_KEY, getHiddenSessionPatterns, setHiddenSessionPatterns } from '../../../sidebar/utils/utils';
+import {
+  HIDDEN_SESSION_STORAGE_KEY,
+  HIDE_WORKTREE_SESSIONS_KEY,
+  getHiddenSessionPatterns,
+  getHideWorktreeSessions,
+  setHiddenSessionPatterns,
+  setHideWorktreeSessions,
+} from '../../../sidebar/utils/utils';
 
 export default function SessionsSettingsTab() {
+  const [hideWorktree, setHideWorktree] = useState(getHideWorktreeSessions);
   const [patterns, setPatterns] = useState<string[]>(getHiddenSessionPatterns);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -14,6 +22,9 @@ export default function SessionsSettingsTab() {
     const onStorage = (e: StorageEvent) => {
       if (e.key === HIDDEN_SESSION_STORAGE_KEY) {
         setPatterns(getHiddenSessionPatterns());
+      }
+      if (e.key === HIDE_WORKTREE_SESSIONS_KEY) {
+        setHideWorktree(getHideWorktreeSessions());
       }
     };
     window.addEventListener('storage', onStorage);
@@ -65,8 +76,45 @@ export default function SessionsSettingsTab() {
     }
   }, [handleAdd]);
 
+  const handleWorktreeToggle = useCallback(() => {
+    const next = !hideWorktree;
+    setHideWorktree(next);
+    setHideWorktreeSessions(next);
+  }, [hideWorktree]);
+
   return (
     <div className="space-y-8">
+      <SettingsSection
+        title="Subagent Sessions"
+        description="Worktree-isolated agent sessions (created by the Agent tool) can clutter the sidebar."
+      >
+        <SettingsCard>
+          <label className="flex cursor-pointer items-center justify-between p-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">Hide worktree agent sessions</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Hides sessions whose project path contains a worktree directory
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={hideWorktree}
+              onClick={handleWorktreeToggle}
+              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                hideWorktree ? 'bg-primary' : 'bg-muted-foreground/30'
+              }`}
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                  hideWorktree ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                }`}
+              />
+            </button>
+          </label>
+        </SettingsCard>
+      </SettingsSection>
+
       <SettingsSection
         title="Hidden Sessions"
         description="Sessions whose name matches any regex pattern below will be hidden from the sidebar."

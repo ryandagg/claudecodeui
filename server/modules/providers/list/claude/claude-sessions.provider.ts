@@ -522,14 +522,14 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolInput: part.input,
               toolId: part.id,
             }));
-          } else if (part.type === 'thinking' && part.thinking) {
+          } else if (part.type === 'thinking' && (part.thinking || part.signature)) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_${partIndex}`,
               sessionId,
               timestamp: ts,
               provider: PROVIDER,
               kind: 'thinking',
-              content: part.thinking,
+              content: part.thinking || '_(thinking redacted)_',
             }));
           }
           partIndex++;

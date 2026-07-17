@@ -1,6 +1,6 @@
 import type { ChatMessage } from '../types/types';
 
-export const TOOL_GROUP_THRESHOLD = 3;
+export const TOOL_GROUP_THRESHOLD = 2;
 
 export interface ToolGroupItem {
   _isGroup: true;
@@ -19,7 +19,11 @@ function isGroupableToolMessage(message: ChatMessage): message is ChatMessage & 
   return Boolean(message.isToolUse && message.toolName && !message.isSubagentContainer);
 }
 
-export function groupConsecutiveTools(messages: ChatMessage[]): MessageListItem[] {
+export function rendersNothing(message: ChatMessage, showThinking: boolean): boolean {
+  return Boolean(message.isThinking && !showThinking);
+}
+
+export function groupConsecutiveTools(messages: ChatMessage[], showThinking = true): MessageListItem[] {
   const items: MessageListItem[] = [];
   let index = 0;
 
@@ -35,12 +39,16 @@ export function groupConsecutiveTools(messages: ChatMessage[]): MessageListItem[
     const run: ChatMessage[] = [message];
     let nextIndex = index + 1;
 
-    while (
-      nextIndex < messages.length &&
-      isGroupableToolMessage(messages[nextIndex]) &&
-      messages[nextIndex].toolName === message.toolName
-    ) {
-      run.push(messages[nextIndex]);
+    while (nextIndex < messages.length) {
+      const candidate = messages[nextIndex];
+      if (rendersNothing(candidate, showThinking)) {
+        nextIndex += 1;
+        continue;
+      }
+      if (!isGroupableToolMessage(candidate) || candidate.toolName !== message.toolName) {
+        break;
+      }
+      run.push(candidate);
       nextIndex += 1;
     }
 

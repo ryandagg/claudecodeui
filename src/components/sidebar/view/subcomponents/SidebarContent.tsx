@@ -1,10 +1,9 @@
-import { type ReactNode } from 'react';
-import { Activity, Archive, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
+import { type ReactNode, useState } from 'react';
+import { Activity, Archive, ChevronRight, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
-import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, SidebarSearchMode } from '../../types/types';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
@@ -36,6 +35,65 @@ function HighlightedSnippet({ snippet, highlights }: { snippet: string; highligh
     <span className="min-w-0 flex-1 break-words text-xs leading-relaxed text-muted-foreground">
       {parts}
     </span>
+  );
+}
+
+type ConversationSessionResult = {
+  sessionId: string;
+  sessionSummary: string;
+  provider?: string;
+  matches: { role: string; snippet: string; highlights: { start: number; end: number }[] }[];
+};
+
+function CollapsibleSessionResult({ session, onNavigate }: { session: ConversationSessionResult; onNavigate: () => void }) {
+  const [expanded, setExpanded] = useState(true);
+
+  return (
+    <div className="rounded-md px-2 py-1.5">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </button>
+        <button
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/50"
+          onClick={onNavigate}
+        >
+          <MessageSquare className="h-3 w-3 flex-shrink-0 text-primary" />
+          <span className="truncate text-xs font-normal text-foreground">
+            {session.sessionSummary}
+          </span>
+          {session.matches.length > 1 && (
+            <span className="flex-shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {session.matches.length}
+            </span>
+          )}
+          {session.provider && session.provider !== 'claude' && (
+            <span className="flex-shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] uppercase text-muted-foreground">
+              {session.provider}
+            </span>
+          )}
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-1 space-y-1 pl-5">
+          {session.matches.map((match, idx) => (
+            <div key={idx} className="flex items-start gap-1">
+              <span className="mt-0.5 flex-shrink-0 text-[10px] font-normal uppercase text-muted-foreground/60">
+                {match.role === 'user' ? 'U' : 'A'}
+              </span>
+              <HighlightedSnippet
+                snippet={match.snippet}
+                highlights={match.highlights}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -141,12 +199,6 @@ type SidebarContentProps = {
   isRefreshing: boolean;
   onCreateProject: () => void;
   onCollapseSidebar: () => void;
-  updateAvailable: boolean;
-  restartRequired: boolean;
-  releaseInfo: ReleaseInfo | null;
-  latestVersion: string | null;
-  currentVersion: string;
-  onShowVersionModal: () => void;
   onShowSettings: () => void;
   projectListProps: SidebarProjectListProps;
   t: TFunction;
@@ -179,12 +231,6 @@ export default function SidebarContent({
   isRefreshing,
   onCreateProject,
   onCollapseSidebar,
-  updateAvailable,
-  restartRequired,
-  releaseInfo,
-  latestVersion,
-  currentVersion,
-  onShowVersionModal,
   onShowSettings,
   projectListProps,
   t,
@@ -272,44 +318,17 @@ export default function SidebarContent({
                     </span>
                   </div>
                   {projectResult.sessions.map((session) => (
-                    <button
+                    <CollapsibleSessionResult
                       key={`${projectResult.projectId ?? projectResult.projectName}-${session.sessionId}`}
-                      className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-accent/50"
-                      onClick={() => onConversationResultClick(
-                        // Pass the DB projectId (preferred) so the parent can
-                        // cross-reference with the loaded projects list.
+                      session={session}
+                      onNavigate={() => onConversationResultClick(
                         projectResult.projectId,
                         session.sessionId,
                         session.provider || session.matches[0]?.provider || 'claude',
                         session.matches[0]?.timestamp,
                         session.matches[0]?.snippet
                       )}
-                    >
-                      <div className="mb-1 flex items-center gap-1.5">
-                        <MessageSquare className="h-3 w-3 flex-shrink-0 text-primary" />
-                        <span className="truncate text-xs font-normal text-foreground">
-                          {session.sessionSummary}
-                        </span>
-                        {session.provider && session.provider !== 'claude' && (
-                          <span className="flex-shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] uppercase text-muted-foreground">
-                            {session.provider}
-                          </span>
-                        )}
-                      </div>
-                      <div className="space-y-1 pl-4">
-                        {session.matches.map((match, idx) => (
-                          <div key={idx} className="flex items-start gap-1">
-                            <span className="mt-0.5 flex-shrink-0 text-[10px] font-normal uppercase text-muted-foreground/60">
-                              {match.role === 'user' ? 'U' : 'A'}
-                            </span>
-                            <HighlightedSnippet
-                              snippet={match.snippet}
-                              highlights={match.highlights}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </button>
+                    />
                   ))}
                 </div>
               ))}
@@ -564,12 +583,6 @@ export default function SidebarContent({
       </ScrollArea>
 
       <SidebarFooter
-        updateAvailable={updateAvailable}
-        restartRequired={restartRequired}
-        releaseInfo={releaseInfo}
-        latestVersion={latestVersion}
-        currentVersion={currentVersion}
-        onShowVersionModal={onShowVersionModal}
         onShowSettings={onShowSettings}
         t={t}
       />

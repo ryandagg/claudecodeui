@@ -256,6 +256,9 @@ const upsertSessionIntoProject = (project: Project, event: SessionUpsertedEvent)
     for (const [index, session] of sessions.entries()) {
       if (index === existingIndex) {
         const updated = { ...session, ...normalizedSession };
+        if (!normalizedSession.summary?.trim() && session.summary?.trim()) {
+          updated.summary = session.summary;
+        }
         if (serialize(session) !== serialize(updated)) {
           changed = true;
         }

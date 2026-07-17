@@ -18,7 +18,10 @@ import {
   clearLegacyStarredProjectIds,
   filterProjects,
   getAllSessions,
+  getHideWorktreeSessions,
   getSessionDate,
+  HIDE_WORKTREE_SESSIONS_KEY,
+  isWorktreeProject,
   readLegacyStarredProjectIds,
   readProjectSortOrder,
   sortProjects,
@@ -141,6 +144,7 @@ export function useSidebarController({
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
+  const [hideWorktree, setHideWorktree] = useState(getHideWorktreeSessions);
   // Local fork: default to the flat, recency-sorted Conversations view on load
   // rather than the project-grouped Projects view.
   const [searchMode, setSearchMode] = useState<SidebarSearchMode>('conversations');
@@ -216,6 +220,9 @@ export function useSidebarController({
     const handleStorageChange = (event: StorageEvent) => {
       if (event.key === 'claude-settings') {
         loadSortOrder();
+      }
+      if (event.key === HIDE_WORKTREE_SESSIONS_KEY) {
+        setHideWorktree(getHideWorktreeSessions());
       }
     };
 
@@ -667,10 +674,12 @@ export function useSidebarController({
     });
   }, [optimisticStarByProjectId, projects]);
 
-  const sortedProjects = useMemo(
-    () => sortProjects(projectsWithResolvedStarState, projectSortOrder),
-    [projectSortOrder, projectsWithResolvedStarState],
-  );
+  const sortedProjects = useMemo(() => {
+    const base = hideWorktree
+      ? projectsWithResolvedStarState.filter((p) => !isWorktreeProject(p))
+      : projectsWithResolvedStarState;
+    return sortProjects(base, projectSortOrder);
+  }, [hideWorktree, projectSortOrder, projectsWithResolvedStarState]);
 
   const runningProjects = useMemo(() => {
     // "Running" should surface live work regardless of who started it. The

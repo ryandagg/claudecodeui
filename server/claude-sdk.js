@@ -618,6 +618,16 @@ async function queryClaudeSDK(command, options = {}, ws) {
         if (isAllowed) {
           return { behavior: 'allow', updatedInput: input };
         }
+
+        // Auto-approve Write/Edit to any path under ~/Documents — the user's
+        // additionalDirectories already grants read access; this extends to writes
+        // without requiring per-path approval prompts.
+        if ((toolName === 'Write' || toolName === 'Edit') && input && typeof input === 'object') {
+          const filePath = input.file_path || input.filePath || '';
+          if (typeof filePath === 'string' && filePath.startsWith(process.env.HOME + '/Documents/')) {
+            return { behavior: 'allow', updatedInput: input };
+          }
+        }
       }
 
       const requestId = createRequestId();
@@ -634,7 +644,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }));
 
       const decision = await waitForToolApproval(requestId, {
-        timeoutMs: requiresInteraction ? 0 : undefined,
+        timeoutMs: 0,
         signal: context?.signal,
         metadata: {
           _sessionId: capturedSessionId || sessionId || null,

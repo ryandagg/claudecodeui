@@ -920,6 +920,28 @@ export function useChatComposerState({
     handleSubmitRef.current?.(createFakeSubmitEvent());
   }, [isLoading, queuedDraft, sessionKey]);
 
+  // On mount: if a queued draft was restored from storage but the session is
+  // already idle, flush it immediately — the true→false transition won't fire.
+  const mountFlushedRef = useRef(false);
+  useEffect(() => {
+    if (mountFlushedRef.current) return;
+    if (!queuedDraft || !sessionKey) return;
+    if (queuedDraft.sessionId !== sessionKey) return;
+    if (isLoading) {
+      mountFlushedRef.current = true;
+      return;
+    }
+    mountFlushedRef.current = true;
+    const draft = queuedDraft;
+    setQueuedDraft(null);
+    setInput(draft.content);
+    inputValueRef.current = draft.content;
+    if (draft.images.length > 0) {
+      setAttachedImages(draft.images);
+    }
+    setTimeout(() => handleSubmitRef.current?.(createFakeSubmitEvent()), 0);
+  }, [isLoading, queuedDraft, sessionKey]);
+
   const editQueuedDraft = useCallback(() => {
     if (!queuedDraft) return;
     const draft = queuedDraft;

@@ -1,12 +1,12 @@
 {
-  "name": "@cloudcli-ai/cloudcli",
+  "name": "claude-gui",
   "version": "1.35.0",
-  "productName": "CloudCLI",
-  "description": "A web-based UI for Claude Code CLI",
+  "productName": "Claude GUI",
+  "description": "Local web GUI for Claude Code sessions (Bedrock passthrough)",
   "type": "module",
   "main": "dist-server/server/index.js",
   "bin": {
-    "cloudcli": "dist-server/server/cli.js"
+    "claude-gui": "dist-server/server/cli.js"
   },
   "files": [
     "electron/",
@@ -18,13 +18,13 @@
     "scripts/",
     "README.md"
   ],
-  "homepage": "https://cloudcli.ai",
+  "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/siteboon/claudecodeui.git"
+    "url": "git+https://github.com/nicandgus/claude-gui.git"
   },
   "bugs": {
-    "url": "https://github.com/siteboon/claudecodeui/issues"
+    "url": "https://github.com/nicandgus/claude-gui/issues"
   },
   "scripts": {
     "predev": "node scripts/dev-preflight.js",

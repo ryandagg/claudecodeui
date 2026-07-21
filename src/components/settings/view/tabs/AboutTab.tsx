@@ -17,7 +17,16 @@ export default function AboutTab() {
 
       <div className="border-t border-border/50 pt-4">
         <p className="text-xs text-muted-foreground/60">
-          Fork of CloudCLI UI · Licensed under AGPL-3.0
+          Built on{' '}
+          <a
+            href="https://github.com/siteboon/claudecodeui"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-muted-foreground"
+          >
+            CloudCLI UI
+          </a>
+          {' '}· Licensed under AGPL-3.0
         </p>
       </div>
     </div>

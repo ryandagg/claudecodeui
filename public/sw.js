@@ -79,7 +79,7 @@ self.addEventListener('push', event => {
   try {
     payload = event.data.json();
   } catch {
-    payload = { title: 'CloudCLI', body: event.data.text() };
+    payload = { title: 'Claude GUI', body: event.data.text() };
   }
 
   const options = {
@@ -93,7 +93,7 @@ self.addEventListener('push', event => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(payload.title || 'CloudCLI', options)
+    self.registration.showNotification(payload.title || 'Claude GUI', options)
   );
 });
 

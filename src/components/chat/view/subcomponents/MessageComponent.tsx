@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ShieldCheckIcon } from 'lucide-react';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
@@ -12,9 +13,8 @@ import { formatUsageLimitText } from '../../utils/chatFormatting';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
+import { buildClaudeToolPermissionEntry } from '../../utils/chatPermissions';
 
-import { ShieldCheckIcon } from 'lucide-react';
-import { buildClaudeToolPermissionEntry, formatToolInputForDisplay } from '../../utils/chatPermissions';
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
 import MessageReactions from './MessageReactions';

@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import JSZip from 'jszip';
+
 import { api } from '../../../utils/api';
 import type { FileTreeNode } from '../types/types';
 import type { Project } from '../../../types/app';
@@ -280,6 +281,7 @@ export function useFileTreeOperations({
     } finally {
       setOperationLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject, showToast]);
 
   // Download a single file

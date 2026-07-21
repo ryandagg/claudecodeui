@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useMemo } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState  } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   ChangeEvent,
@@ -273,6 +272,7 @@ export default function ChatComposer({
       left: textareaRect ? textareaRect.left : 16,
       bottom: textareaRect ? window.innerHeight - textareaRect.top + 8 : 90,
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [input, isCommandMenuOpen, textareaRef]);
 
   // Voice state is hosted here (not in the mic button) so the main Send button can stop

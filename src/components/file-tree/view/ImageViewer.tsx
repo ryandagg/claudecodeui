@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+
 import { Button } from '../../../shared/view/ui';
 import { useEscapeClose } from '../../../hooks/useEscapeClose';
 import { authenticatedFetch } from '../../../utils/api';

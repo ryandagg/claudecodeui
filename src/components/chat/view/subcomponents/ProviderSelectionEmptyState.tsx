@@ -112,10 +112,10 @@ export default function ProviderSelectionEmptyState({
   setOpenCodeModel,
   providerModelCatalog,
   providerModelsLoading,
-  tasksEnabled,
-  isTaskMasterInstalled,
-  onShowAllTasks,
-  setInput,
+  tasksEnabled: _tasksEnabled,
+  isTaskMasterInstalled: _isTaskMasterInstalled,
+  onShowAllTasks: _onShowAllTasks,
+  setInput: _setInput,
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -128,9 +128,6 @@ export default function ProviderSelectionEmptyState({
     }));
   }, [providerModelCatalog]);
 
-  const nextTaskPrompt = t("tasks.nextTaskPrompt", {
-    defaultValue: "Start the next task",
-  });
 
   const currentModel = getCurrentModel(
     provider,

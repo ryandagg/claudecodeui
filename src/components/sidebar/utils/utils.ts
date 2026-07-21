@@ -97,11 +97,11 @@ export const getHideWorktreeSessions = (): boolean => {
 
 export const setHideWorktreeSessions = (hide: boolean): void => {
   localStorage.setItem(HIDE_WORKTREE_SESSIONS_KEY, String(hide));
-  hideWorktreeSessions = hide;
+  _hideWorktreeSessions = hide;
   window.dispatchEvent(new StorageEvent('storage', { key: HIDE_WORKTREE_SESSIONS_KEY }));
 };
 
-let hideWorktreeSessions = getHideWorktreeSessions();
+let _hideWorktreeSessions = getHideWorktreeSessions();
 
 const WORKTREE_PATH_PATTERN = /[\\/]worktrees[\\/]/;
 

@@ -5,8 +5,8 @@ import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
-import type { Project, LLMProvider } from '../../../types/app';
-import type { MCPServerStatus, SidebarProps } from '../types/types';
+import type { LLMProvider } from '../../../types/app';
+import type { SidebarProps } from '../types/types';
 
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';

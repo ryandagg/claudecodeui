@@ -30,6 +30,7 @@ export function PaletteOpsProvider({ children }: { children: ReactNode }) {
   return <PaletteOpsContext.Provider value={ref}>{children}</PaletteOpsContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePaletteOps(): PaletteOps {
   const ref = useContext(PaletteOpsContext);
   return useMemo<PaletteOps>(
@@ -46,6 +47,7 @@ export function usePaletteOps(): PaletteOps {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePaletteOpsRegister(partial: Partial<PaletteOps>) {
   const ref = useContext(PaletteOpsContext);
   const { openFile, openFileInEditor, openFileInVSCode, openSettings, refreshProjects } = partial;
@@ -63,6 +65,7 @@ export function usePaletteOpsRegister(partial: Partial<PaletteOps>) {
       if (openFileInEditor && ref.current.openFileInEditor === openFileInEditor) ref.current.openFileInEditor = prev.openFileInEditor;
       if (openFileInVSCode && ref.current.openFileInVSCode === openFileInVSCode) ref.current.openFileInVSCode = prev.openFileInVSCode;
       if (openSettings && ref.current.openSettings === openSettings) ref.current.openSettings = prev.openSettings;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       if (refreshProjects && ref.current.refreshProjects === refreshProjects) ref.current.refreshProjects = prev.refreshProjects;
     };
   }, [ref, openFile, openFileInEditor, openFileInVSCode, openSettings, refreshProjects]);

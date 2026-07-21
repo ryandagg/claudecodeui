@@ -214,4 +214,5 @@ const DialogTitle = React.forwardRef<HTMLHeadingElement, React.HTMLAttributes<HT
 );
 DialogTitle.displayName = 'DialogTitle';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export { Dialog, DialogTrigger, DialogContent, DialogTitle, useDialog };

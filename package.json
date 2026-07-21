@@ -26,8 +26,7 @@
   },
   "scripts": {
     "predev": "node scripts/dev-preflight.js",
-    "dev": "concurrently --kill-others \"npm run server:dev-watch\" \"npm run client\"",
-    "dev:no-watch": "concurrently --kill-others \"npm run server:dev\" \"npm run client\"",
+    "dev": "npm run client",
     "server": "node dist-server/server/index.js",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",

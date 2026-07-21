@@ -1138,8 +1138,11 @@ export function useChatComposerState({
 
   const sendQueuedDraftNow = useCallback(() => {
     if (!queuedDraft) return;
-    handleAbortSession();
-  }, [queuedDraft, handleAbortSession]);
+    const targetSessionId = selectedSession?.id || currentSessionId || null;
+    if (targetSessionId) {
+      sendMessage({ type: 'chat.abort', sessionId: targetSessionId });
+    }
+  }, [queuedDraft, selectedSession?.id, currentSessionId, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
     async (suggestion: { entry: string; toolName: string }) => {

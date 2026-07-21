@@ -279,6 +279,16 @@ export const api = {
     },
   },
 
+  // UI Preferences (DB-persisted)
+  settings: {
+    get: () => authenticatedFetch('/api/settings/ui-preferences'),
+    put: (settings) =>
+      authenticatedFetch('/api/settings/ui-preferences', {
+        method: 'PUT',
+        body: JSON.stringify({ settings }),
+      }),
+  },
+
   // Generic GET method for any endpoint
   get: (endpoint) => authenticatedFetch(`/api${endpoint}`),
 

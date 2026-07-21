@@ -4,6 +4,7 @@ import {
   credentialsDb,
   notificationPreferencesDb,
   pushSubscriptionsDb,
+  userSettingsDb,
 } from '../modules/database/index.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
@@ -248,6 +249,42 @@ router.post('/push/unsubscribe', async (req, res) => {
   } catch (error) {
     console.error('Error removing push subscription:', error);
     res.status(500).json({ error: 'Failed to remove push subscription' });
+  }
+});
+
+// ===============================
+// UI Preferences (persisted per-user)
+// ===============================
+
+router.get('/ui-preferences', async (req, res) => {
+  try {
+    const settings = userSettingsDb.get(req.user.id);
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Error fetching UI preferences:', error);
+    res.status(500).json({ error: 'Failed to fetch UI preferences' });
+  }
+});
+
+router.put('/ui-preferences', async (req, res) => {
+  try {
+    const { settings } = req.body || {};
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      return res.status(400).json({ error: 'settings must be an object of key-value pairs' });
+    }
+
+    const sanitized = {};
+    for (const [key, value] of Object.entries(settings)) {
+      if (typeof key === 'string' && key.length <= 128) {
+        sanitized[key] = typeof value === 'string' ? value : JSON.stringify(value);
+      }
+    }
+
+    userSettingsDb.put(req.user.id, sanitized);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving UI preferences:', error);
+    res.status(500).json({ error: 'Failed to save UI preferences' });
   }
 });
 

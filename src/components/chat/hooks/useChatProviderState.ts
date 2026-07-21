@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useSettings } from '../../../contexts/SettingsContext';
 import { authenticatedFetch } from '../../../utils/api';
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type {
@@ -83,16 +84,18 @@ type ChangeActiveModelApiResponse = {
 };
 
 export function useChatProviderState({ selectedSession, selectedProject: _selectedProject }: UseChatProviderStateArgs) {
+  const { getSetting, setSetting } = useSettings();
+
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   const [provider, setProvider] = useState<LLMProvider>(() => {
-    return (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    return (getSetting('selected-provider') as LLMProvider) || 'claude';
   });
   const [cursorModel, setCursorModel] = useState<string>(() => {
     return localStorage.getItem('cursor-model') || FALLBACK_DEFAULT_MODEL.cursor;
   });
   const [claudeModel, setClaudeModel] = useState<string>(() => {
-    return localStorage.getItem('claude-model') || FALLBACK_DEFAULT_MODEL.claude;
+    return getSetting('claude-model') || FALLBACK_DEFAULT_MODEL.claude;
   });
   const [codexModel, setCodexModel] = useState<string>(() => {
     return localStorage.getItem('codex-model') || FALLBACK_DEFAULT_MODEL.codex;
@@ -106,7 +109,10 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
   const [providerEfforts, setProviderEfforts] = useState<Partial<Record<LLMProvider, string>>>(() => {
     return PROVIDERS.reduce<Partial<Record<LLMProvider, string>>>((acc, targetProvider) => {
-      acc[targetProvider] = localStorage.getItem(`${targetProvider}-effort`) || DEFAULT_EFFORT_VALUE;
+      const stored = targetProvider === 'claude'
+        ? getSetting('claude-effort')
+        : localStorage.getItem(`${targetProvider}-effort`);
+      acc[targetProvider] = stored || DEFAULT_EFFORT_VALUE;
       return acc;
     }, {});
   });
@@ -115,8 +121,12 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     setProviderEfforts((previous) => (
       previous[targetProvider] === effort ? previous : { ...previous, [targetProvider]: effort }
     ));
-    localStorage.setItem(`${targetProvider}-effort`, effort);
-  }, []);
+    if (targetProvider === 'claude') {
+      setSetting('claude-effort', effort);
+    } else {
+      localStorage.setItem(`${targetProvider}-effort`, effort);
+    }
+  }, [setSetting]);
 
   /**
    * Backend-owned capability matrix keyed by provider. Drives the permission
@@ -143,7 +153,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const setStoredProviderModel = useCallback((targetProvider: LLMProvider, model: string) => {
     if (targetProvider === 'claude') {
       setClaudeModel(model);
-      localStorage.setItem('claude-model', model);
+      setSetting('claude-model', model);
       return;
     }
 
@@ -167,7 +177,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
     setOpenCodeModel(model);
     localStorage.setItem('opencode-model', model);
-  }, []);
+  }, [setSetting]);
 
   const loadProviderModels = useCallback(async (options: { bypassCache?: boolean } = {}) => {
     const providers: LLMProvider[] = ['claude', 'cursor', 'codex', 'gemini', 'opencode'];
@@ -395,14 +405,20 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   useEffect(() => {
     const claude = providerModelCatalog.claude;
     if (claude) {
-      const next = pickStoredOrCurrent('claude-model', claudeModel, claude);
+      const stored = getSetting('claude-model');
+      const next = stored && claude.OPTIONS.some((o) => o.value === stored)
+        ? stored
+        : claudeModel && claude.OPTIONS.some((o) => o.value === claudeModel)
+          ? claudeModel
+          : claude.DEFAULT;
       if (next !== claudeModel) {
         setClaudeModel(next);
       }
-      if (localStorage.getItem('claude-model') !== next) {
-        localStorage.setItem('claude-model', next);
+      if (getSetting('claude-model') !== next) {
+        setSetting('claude-model', next);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerModelCatalog.claude, claudeModel]);
 
   useEffect(() => {
@@ -473,8 +489,8 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     }
 
     setProvider(selectedSession.__provider);
-    localStorage.setItem('selected-provider', selectedSession.__provider);
-  }, [provider, selectedSession]);
+    setSetting('selected-provider', selectedSession.__provider);
+  }, [provider, selectedSession, setSetting]);
 
   // Permission prompts belong to a session, not to the transient provider
   // selection that is synchronized after navigation.

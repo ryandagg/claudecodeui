@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
+import { useSettings } from '../contexts/SettingsContext';
+
 // Custom, user-editable keyboard shortcuts. Bindings are stored as canonical
-// strings (e.g. "mod+shift+n") in a single localStorage key and synced across
-// hook instances via a CustomEvent, mirroring useUiPreferences. `mod` is the
-// platform-primary modifier: Cmd on macOS, Ctrl elsewhere.
+// strings (e.g. "mod+shift+n") in a single DB-backed setting and shared across
+// hook instances via SettingsContext. `mod` is the platform-primary modifier:
+// Cmd on macOS, Ctrl elsewhere.
 
 export type ShortcutActionId = 'newSessionInCurrentDir' | 'scrollToBottom';
 
@@ -34,7 +36,6 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
 export type ShortcutBindings = Record<ShortcutActionId, string>;
 
 const STORAGE_KEY = 'keyboardShortcuts';
-const SYNC_EVENT = 'keyboard-shortcuts:sync';
 
 const ACTION_IDS = SHORTCUT_DEFINITIONS.map((d) => d.id);
 const VALID_IDS = new Set<ShortcutActionId>(ACTION_IDS);
@@ -119,11 +120,10 @@ const sanitize = (raw: unknown): ShortcutBindings => {
   return result;
 };
 
-const readInitial = (): ShortcutBindings => {
-  if (typeof window === 'undefined') return { ...DEFAULTS };
+const parseBindings = (raw: string | null): ShortcutBindings => {
+  if (!raw) return { ...DEFAULTS };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? sanitize(JSON.parse(raw)) : { ...DEFAULTS };
+    return sanitize(JSON.parse(raw));
   } catch {
     return { ...DEFAULTS };
   }
@@ -158,51 +158,21 @@ function reducer(state: ShortcutBindings, action: Action): ShortcutBindings {
   }
 }
 
-type SyncDetail = { sourceId: string; value: ShortcutBindings };
-
 /**
  * Read/edit the persisted keyboard-shortcut bindings. Changes are written to
- * localStorage and broadcast to other instances in the same tab.
+ * the DB-backed settings store, which shares them across all hook instances.
  */
 export function useKeyboardShortcuts() {
-  const instanceIdRef = useRef(`keyboard-shortcuts-${Math.random().toString(36).slice(2)}`);
-  const [bindings, dispatch] = useReducer(reducer, undefined, readInitial);
+  const { getSetting, setSetting, ready } = useSettings();
+  const [bindings, dispatch] = useReducer(reducer, undefined, () => (
+    parseBindings(getSetting(STORAGE_KEY))
+  ));
+  const didHydrateRef = useRef(false);
 
+  // Re-sync when settings finish loading or another instance persists a change.
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(bindings));
-    window.dispatchEvent(
-      new CustomEvent<SyncDetail>(SYNC_EVENT, {
-        detail: { sourceId: instanceIdRef.current, value: bindings },
-      }),
-    );
-  }, [bindings]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEY || event.newValue === null) return;
-      try {
-        dispatch({ type: 'set_many', value: sanitize(JSON.parse(event.newValue)) });
-      } catch {
-        // Ignore malformed storage updates.
-      }
-    };
-
-    const handleSync = (event: Event) => {
-      const detail = (event as CustomEvent<SyncDetail>).detail;
-      if (!detail || detail.sourceId === instanceIdRef.current) return;
-      dispatch({ type: 'set_many', value: detail.value });
-    };
-
-    window.addEventListener('storage', handleStorage);
-    window.addEventListener(SYNC_EVENT, handleSync as EventListener);
-    return () => {
-      window.removeEventListener('storage', handleStorage);
-      window.removeEventListener(SYNC_EVENT, handleSync as EventListener);
-    };
-  }, []);
+    dispatch({ type: 'set_many', value: parseBindings(getSetting(STORAGE_KEY)) });
+  }, [ready, getSetting]);
 
   const setBinding = useCallback((id: ShortcutActionId, binding: string) => {
     dispatch({ type: 'set', id, binding });
@@ -211,6 +181,15 @@ export function useKeyboardShortcuts() {
   const resetBinding = useCallback((id?: ShortcutActionId) => {
     dispatch({ type: 'reset', id });
   }, []);
+
+  // Skip the first run so the pre-load default never clobbers the stored value.
+  useEffect(() => {
+    if (!didHydrateRef.current) {
+      didHydrateRef.current = true;
+      return;
+    }
+    setSetting(STORAGE_KEY, JSON.stringify(bindings));
+  }, [bindings, setSetting]);
 
   return { bindings, setBinding, resetBinding };
 }

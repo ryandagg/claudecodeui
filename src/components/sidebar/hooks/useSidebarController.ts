@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 
 import { api } from '../../../utils/api';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
+import { useSettings } from '../../../contexts/SettingsContext';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionActivityMap } from '../../../hooks/useSessionProtection';
 import type {
@@ -16,14 +17,18 @@ import type {
 } from '../types/types';
 import {
   clearLegacyStarredProjectIds,
+  compilePatterns,
   filterProjects,
   getAllSessions,
-  getHideWorktreeSessions,
   getSessionDate,
+  HIDDEN_SESSION_STORAGE_KEY,
   HIDE_WORKTREE_SESSIONS_KEY,
   isWorktreeProject,
+  parseHiddenSessionPatterns,
+  parseHideWorktreeSessions,
+  parseProjectSortOrder,
+  PROJECT_SORT_ORDER_KEY,
   readLegacyStarredProjectIds,
-  readProjectSortOrder,
   sortProjects,
 } from '../utils/utils';
 
@@ -129,13 +134,14 @@ export function useSidebarController({
   sidebarVisible,
 }: UseSidebarControllerArgs) {
   const paletteOps = usePaletteOps();
+  const { getSetting } = useSettings();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [editingName, setEditingName] = useState('');
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState<Set<string>>(new Set());
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
+  const projectSortOrder: ProjectSortOrder = parseProjectSortOrder(getSetting(PROJECT_SORT_ORDER_KEY));
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [editingSession, setEditingSession] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
@@ -144,7 +150,11 @@ export function useSidebarController({
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
-  const [hideWorktree, setHideWorktree] = useState(getHideWorktreeSessions);
+  const hideWorktree = parseHideWorktreeSessions(getSetting(HIDE_WORKTREE_SESSIONS_KEY));
+  const hiddenSessionRegexes = useMemo(
+    () => compilePatterns(parseHiddenSessionPatterns(getSetting(HIDDEN_SESSION_STORAGE_KEY))),
+    [getSetting],
+  );
   // Local fork: default to the flat, recency-sorted Conversations view on load
   // rather than the project-grouped Projects view.
   const [searchMode, setSearchMode] = useState<SidebarSearchMode>('conversations');
@@ -210,36 +220,6 @@ export function useSidebarController({
       setInitialSessionsLoaded(loadedProjects);
     }
   }, [projects, isLoading]);
-
-  useEffect(() => {
-    const loadSortOrder = () => {
-      setProjectSortOrder(readProjectSortOrder());
-    };
-
-    loadSortOrder();
-
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === 'claude-settings') {
-        loadSortOrder();
-      }
-      if (event.key === HIDE_WORKTREE_SESSIONS_KEY) {
-        setHideWorktree(getHideWorktreeSessions());
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-
-    const interval = setInterval(() => {
-      if (document.hasFocus()) {
-        loadSortOrder();
-      }
-    }, 1000);
-
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, []);
 
   useEffect(() => {
     onRefreshRef.current = onRefresh;
@@ -615,7 +595,10 @@ export function useSidebarController({
     void updateStar();
   }, [resolveSessionStarState, t]);
 
-  const getProjectSessions = useCallback((project: Project) => getAllSessions(project), []);
+  const getProjectSessions = useCallback(
+    (project: Project) => getAllSessions(project, hiddenSessionRegexes),
+    [hiddenSessionRegexes],
+  );
 
   const loadMoreSessionsForProject = useCallback(async (projectId: string) => {
     if (!onLoadMoreSessions) {
@@ -698,7 +681,7 @@ export function useSidebarController({
     };
 
     return sortedProjects.reduce<Project[]>((acc, project) => {
-      const sessions = getAllSessions(project).filter(
+      const sessions = getAllSessions(project, hiddenSessionRegexes).filter(
         (session) => activeSessionIds.has(String(session.id)) || isRecentlyActive(session),
       );
 
@@ -717,7 +700,7 @@ export function useSidebarController({
       });
       return acc;
     }, []);
-  }, [activeSessionIds, sortedProjects]);
+  }, [activeSessionIds, hiddenSessionRegexes, sortedProjects]);
 
   // Count agrees with the Running list (registry runs ∪ recently-active),
   // not just the registry size, so the badge matches what's actually shown.
@@ -765,7 +748,7 @@ export function useSidebarController({
         return true;
       }
 
-      return getAllSessions(project).some((session) => {
+      return getAllSessions(project, hiddenSessionRegexes).some((session) => {
         const sessionSummary =
           typeof session.summary === 'string' && session.summary.trim().length > 0
             ? session.summary
@@ -779,7 +762,7 @@ export function useSidebarController({
         ].some((value) => value.toLowerCase().includes(normalizedSearch));
       });
     });
-  }, [archivedProjects, debouncedSearchQuery]);
+  }, [archivedProjects, debouncedSearchQuery, hiddenSessionRegexes]);
 
   const startEditing = useCallback((project: Project) => {
     // `editingProject` is keyed by projectId so it stays stable across

@@ -1,40 +1,26 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 
+import { useSettings } from '../../../../contexts/SettingsContext';
 import SettingsCard from '../SettingsCard';
 import SettingsSection from '../SettingsSection';
 import {
   HIDDEN_SESSION_STORAGE_KEY,
   HIDE_WORKTREE_SESSIONS_KEY,
-  getHiddenSessionPatterns,
-  getHideWorktreeSessions,
-  setHiddenSessionPatterns,
-  setHideWorktreeSessions,
+  parseHiddenSessionPatterns,
+  parseHideWorktreeSessions,
 } from '../../../sidebar/utils/utils';
 
 export default function SessionsSettingsTab() {
-  const [hideWorktree, setHideWorktree] = useState(getHideWorktreeSessions);
-  const [patterns, setPatterns] = useState<string[]>(getHiddenSessionPatterns);
+  const { getSetting, setSetting } = useSettings();
+  const hideWorktree = parseHideWorktreeSessions(getSetting(HIDE_WORKTREE_SESSIONS_KEY));
+  const patterns = parseHiddenSessionPatterns(getSetting(HIDDEN_SESSION_STORAGE_KEY));
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === HIDDEN_SESSION_STORAGE_KEY) {
-        setPatterns(getHiddenSessionPatterns());
-      }
-      if (e.key === HIDE_WORKTREE_SESSIONS_KEY) {
-        setHideWorktree(getHideWorktreeSessions());
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
   const persist = useCallback((next: string[]) => {
-    setPatterns(next);
-    setHiddenSessionPatterns(next);
-  }, []);
+    setSetting(HIDDEN_SESSION_STORAGE_KEY, JSON.stringify(next));
+  }, [setSetting]);
 
   const handleAdd = useCallback(() => {
     const value = draft.trim();
@@ -77,10 +63,8 @@ export default function SessionsSettingsTab() {
   }, [handleAdd]);
 
   const handleWorktreeToggle = useCallback(() => {
-    const next = !hideWorktree;
-    setHideWorktree(next);
-    setHideWorktreeSessions(next);
-  }, [hideWorktree]);
+    setSetting(HIDE_WORKTREE_SESSIONS_KEY, String(!hideWorktree));
+  }, [hideWorktree, setSetting]);
 
   return (
     <div className="space-y-8">

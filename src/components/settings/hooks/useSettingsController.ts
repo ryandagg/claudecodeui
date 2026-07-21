@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { useSettings } from '../../../contexts/SettingsContext';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { authenticatedFetch } from '../../../utils/api';
 import { setNotificationSoundEnabled } from '../../../utils/notificationSound';
@@ -67,22 +68,25 @@ const normalizeNotificationPreferences = (
   };
 };
 
-const readCodeEditorSettings = (): CodeEditorSettingsState => ({
-  theme: localStorage.getItem('codeEditorTheme') === 'light' ? 'light' : 'dark',
-  wordWrap: localStorage.getItem('codeEditorWordWrap') === 'true',
-  showMinimap: localStorage.getItem('codeEditorShowMinimap') !== 'false',
-  lineNumbers: localStorage.getItem('codeEditorLineNumbers') !== 'false',
-  fontSize: localStorage.getItem('codeEditorFontSize') ?? DEFAULT_CODE_EDITOR_SETTINGS.fontSize,
+type GetSetting = (key: string, fallback?: string) => string | null;
+
+const readCodeEditorSettings = (getSetting: GetSetting): CodeEditorSettingsState => ({
+  theme: getSetting('codeEditorTheme') === 'light' ? 'light' : 'dark',
+  wordWrap: getSetting('codeEditorWordWrap') === 'true',
+  showMinimap: getSetting('codeEditorShowMinimap') !== 'false',
+  lineNumbers: getSetting('codeEditorLineNumbers') !== 'false',
+  fontSize: getSetting('codeEditorFontSize') ?? DEFAULT_CODE_EDITOR_SETTINGS.fontSize,
 });
 
 export function useSettingsController({ isOpen, initialTab }: UseSettingsControllerArgs) {
   const { isDarkMode, toggleDarkMode } = useTheme() as ThemeContextValue;
+  const { getSetting, setSetting } = useSettings();
 
   const [activeTab, setActiveTab] = useState<SettingsMainTab>(() => normalizeMainTab(initialTab));
   const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
   const [codeEditorSettings, setCodeEditorSettings] = useState<CodeEditorSettingsState>(() => (
-    readCodeEditorSettings()
+    readCodeEditorSettings(getSetting)
   ));
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferencesState>(() => (
     createDefaultNotificationPreferences()
@@ -93,7 +97,8 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
 
   const loadSettings = useCallback(async () => {
     try {
-      setProjectSortOrder(localStorage.getItem(PROJECT_SORT_ORDER_KEY) === 'date' ? 'date' : 'name');
+      setProjectSortOrder(getSetting(PROJECT_SORT_ORDER_KEY) === 'date' ? 'date' : 'name');
+      setCodeEditorSettings(readCodeEditorSettings(getSetting));
 
       try {
         const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences');
@@ -115,13 +120,13 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
       setNotificationPreferences(createDefaultNotificationPreferences());
       setProjectSortOrder('name');
     }
-  }, []);
+  }, [getSetting]);
 
   const saveSettings = useCallback(async () => {
     setSaveStatus(null);
 
     try {
-      localStorage.setItem(PROJECT_SORT_ORDER_KEY, projectSortOrder);
+      setSetting(PROJECT_SORT_ORDER_KEY, projectSortOrder);
 
       const notificationResponse = await authenticatedFetch('/api/settings/notification-preferences', {
         method: 'PUT',
@@ -136,7 +141,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
       console.error('Error saving settings:', error);
       setSaveStatus('error');
     }
-  }, [notificationPreferences, projectSortOrder]);
+  }, [notificationPreferences, projectSortOrder, setSetting]);
 
   const updateCodeEditorSetting = useCallback(
     <K extends keyof CodeEditorSettingsState>(key: K, value: CodeEditorSettingsState[K]) => {
@@ -159,13 +164,12 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   }, [notificationPreferences.channels.sound]);
 
   useEffect(() => {
-    localStorage.setItem('codeEditorTheme', codeEditorSettings.theme);
-    localStorage.setItem('codeEditorWordWrap', String(codeEditorSettings.wordWrap));
-    localStorage.setItem('codeEditorShowMinimap', String(codeEditorSettings.showMinimap));
-    localStorage.setItem('codeEditorLineNumbers', String(codeEditorSettings.lineNumbers));
-    localStorage.setItem('codeEditorFontSize', codeEditorSettings.fontSize);
-    window.dispatchEvent(new Event('codeEditorSettingsChanged'));
-  }, [codeEditorSettings]);
+    setSetting('codeEditorTheme', codeEditorSettings.theme);
+    setSetting('codeEditorWordWrap', String(codeEditorSettings.wordWrap));
+    setSetting('codeEditorShowMinimap', String(codeEditorSettings.showMinimap));
+    setSetting('codeEditorLineNumbers', String(codeEditorSettings.lineNumbers));
+    setSetting('codeEditorFontSize', codeEditorSettings.fontSize);
+  }, [codeEditorSettings, setSetting]);
 
   useEffect(() => {
     if (isInitialLoadRef.current) {

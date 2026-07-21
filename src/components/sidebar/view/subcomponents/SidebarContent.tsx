@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { Activity, Archive, ChevronRight, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -7,7 +7,13 @@ import type { Project } from '../../../../types/app';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, SidebarSearchMode } from '../../types/types';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
-import { getAllSessions } from '../../utils/utils';
+import { useSettings } from '../../../../contexts/SettingsContext';
+import {
+  compilePatterns,
+  getAllSessions,
+  HIDDEN_SESSION_STORAGE_KEY,
+  parseHiddenSessionPatterns,
+} from '../../utils/utils';
 
 import SidebarConversationList from './SidebarConversationList';
 import SidebarFooter from './SidebarFooter';
@@ -241,6 +247,11 @@ export default function SidebarContent({
   projectListProps,
   t,
 }: SidebarContentProps) {
+  const { getSetting } = useSettings();
+  const hiddenSessionRegexes = useMemo(
+    () => compilePatterns(parseHiddenSessionPatterns(getSetting(HIDDEN_SESSION_STORAGE_KEY))),
+    [getSetting],
+  );
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
   const groupedArchivedSessions = groupArchivedSessionsByProject(archivedSessions);
@@ -421,7 +432,7 @@ export default function SidebarContent({
                 </p>
               </div>
               {archivedProjects.map((project) => {
-                const projectSessions = getAllSessions(project);
+                const projectSessions = getAllSessions(project, hiddenSessionRegexes);
 
                 return (
                   <div key={project.projectId} className="overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-sm">

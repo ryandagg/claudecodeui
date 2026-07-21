@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react';
 
+import { useSettings } from '../../../contexts/SettingsContext';
 import {
   DEFAULT_HANDLE_POSITION,
   DRAG_THRESHOLD_PX,
@@ -22,12 +23,7 @@ const clampPosition = (value: number): number => (
   Math.max(HANDLE_POSITION_MIN, Math.min(HANDLE_POSITION_MAX, value))
 );
 
-const readHandlePosition = (): number => {
-  if (typeof window === 'undefined') {
-    return DEFAULT_HANDLE_POSITION;
-  }
-
-  const saved = localStorage.getItem(HANDLE_POSITION_STORAGE_KEY);
+const parseHandlePosition = (saved: string | null): number => {
   if (!saved) {
     return DEFAULT_HANDLE_POSITION;
   }
@@ -38,7 +34,6 @@ const readHandlePosition = (): number => {
       return clampPosition(parsed.y);
     }
   } catch {
-    localStorage.removeItem(HANDLE_POSITION_STORAGE_KEY);
     return DEFAULT_HANDLE_POSITION;
   }
 
@@ -58,9 +53,15 @@ const getClientY = (event: EventWithClientY): number | null => {
 };
 
 export function useQuickSettingsDrag({ isMobile }: UseQuickSettingsDragProps) {
-  const [handlePosition, setHandlePosition] = useState<number>(readHandlePosition);
+  const { getSetting, setSetting, ready } = useSettings();
+
+  const [handlePosition, setHandlePosition] = useState<number>(() => (
+    parseHandlePosition(getSetting(HANDLE_POSITION_STORAGE_KEY))
+  ));
   const [isPointerDown, setIsPointerDown] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+
+  const didHydrateRef = useRef(false);
 
   const dragStartYRef = useRef<number | null>(null);
   const dragStartPositionRef = useRef(DEFAULT_HANDLE_POSITION);
@@ -163,13 +164,23 @@ export function useQuickSettingsDrag({ isMobile }: UseQuickSettingsDragProps) {
     setIsPointerDown(true);
   }, [handlePosition]);
 
-  // Persist drag-handle position so users keep their preferred quick-access location.
+  // Re-sync the position once settings finish loading from the DB.
   useEffect(() => {
-    localStorage.setItem(
-      HANDLE_POSITION_STORAGE_KEY,
-      JSON.stringify({ y: handlePosition }),
-    );
-  }, [handlePosition]);
+    if (!ready) {
+      return;
+    }
+    setHandlePosition(parseHandlePosition(getSetting(HANDLE_POSITION_STORAGE_KEY)));
+  }, [ready, getSetting]);
+
+  // Persist drag-handle position so users keep their preferred quick-access location.
+  // Skip the first run so the pre-load default never clobbers the stored value.
+  useEffect(() => {
+    if (!didHydrateRef.current) {
+      didHydrateRef.current = true;
+      return;
+    }
+    setSetting(HANDLE_POSITION_STORAGE_KEY, JSON.stringify({ y: handlePosition }));
+  }, [handlePosition, setSetting]);
 
   useEffect(() => {
     if (!isPointerDown) {

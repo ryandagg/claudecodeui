@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { useSettings } from '../../../contexts/SettingsContext';
 import {
   FILE_TREE_DEFAULT_VIEW_MODE,
   FILE_TREE_VIEW_MODES,
@@ -12,29 +13,30 @@ type UseFileTreeViewModeResult = {
   changeViewMode: (mode: FileTreeViewMode) => void;
 };
 
+const parseViewMode = (saved: string | null): FileTreeViewMode => (
+  saved && FILE_TREE_VIEW_MODES.includes(saved as FileTreeViewMode)
+    ? (saved as FileTreeViewMode)
+    : FILE_TREE_DEFAULT_VIEW_MODE
+);
+
 export function useFileTreeViewMode(): UseFileTreeViewModeResult {
-  const [viewMode, setViewMode] = useState<FileTreeViewMode>(FILE_TREE_DEFAULT_VIEW_MODE);
+  const { getSetting, setSetting, ready } = useSettings();
+
+  const [viewMode, setViewMode] = useState<FileTreeViewMode>(() => (
+    parseViewMode(getSetting(FILE_TREE_VIEW_MODE_STORAGE_KEY))
+  ));
 
   useEffect(() => {
-    try {
-      const savedViewMode = localStorage.getItem(FILE_TREE_VIEW_MODE_STORAGE_KEY);
-      if (savedViewMode && FILE_TREE_VIEW_MODES.includes(savedViewMode as FileTreeViewMode)) {
-        setViewMode(savedViewMode as FileTreeViewMode);
-      }
-    } catch {
-      // Keep default view mode when storage is unavailable.
+    if (!ready) {
+      return;
     }
-  }, []);
+    setViewMode(parseViewMode(getSetting(FILE_TREE_VIEW_MODE_STORAGE_KEY)));
+  }, [ready, getSetting]);
 
   const changeViewMode = useCallback((mode: FileTreeViewMode) => {
     setViewMode(mode);
-
-    try {
-      localStorage.setItem(FILE_TREE_VIEW_MODE_STORAGE_KEY, mode);
-    } catch {
-      // Keep runtime state even when persistence fails.
-    }
-  }, []);
+    setSetting(FILE_TREE_VIEW_MODE_STORAGE_KEY, mode);
+  }, [setSetting]);
 
   return {
     viewMode,

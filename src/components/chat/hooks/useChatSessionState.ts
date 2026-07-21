@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 
+import { useSettings } from '../../../contexts/SettingsContext';
 import { authenticatedFetch } from '../../../utils/api';
 import type { MarkSessionIdle, SessionActivityMap } from '../../../hooks/useSessionProtection';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
@@ -106,6 +107,7 @@ export function useChatSessionState({
   lastSeqRef,
   sessionStore,
 }: UseChatSessionStateArgs) {
+  const { getSetting } = useSettings();
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
   const [isLoadingMoreMessages] = useState(false);

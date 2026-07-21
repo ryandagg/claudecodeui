@@ -7,6 +7,7 @@ import type {
   LLMProvider,
   ProviderModelsDefinition,
 } from "../../../../types/app";
+import { useSettings } from "../../../../contexts/SettingsContext";
 import SessionProviderLogo from "../../../llm-logo-provider/SessionProviderLogo";
 import {
   Dialog,
@@ -118,6 +119,7 @@ export default function ProviderSelectionEmptyState({
   setInput: _setInput,
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
+  const { setSetting } = useSettings();
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const visibleProviderGroups = useMemo<ProviderGroup[]>(() => {
@@ -150,7 +152,7 @@ export default function ProviderSelectionEmptyState({
     (providerId: LLMProvider, modelValue: string) => {
       if (providerId === "claude") {
         setClaudeModel(modelValue);
-        localStorage.setItem("claude-model", modelValue);
+        setSetting("claude-model", modelValue);
       } else if (providerId === "codex") {
         setCodexModel(modelValue);
         localStorage.setItem("codex-model", modelValue);
@@ -165,18 +167,18 @@ export default function ProviderSelectionEmptyState({
         localStorage.setItem("cursor-model", modelValue);
       }
     },
-    [setClaudeModel, setCursorModel, setCodexModel, setGeminiModel, setOpenCodeModel],
+    [setClaudeModel, setCursorModel, setCodexModel, setGeminiModel, setOpenCodeModel, setSetting],
   );
 
   const handleModelSelect = useCallback(
     (providerId: LLMProvider, modelValue: string) => {
       setProvider(providerId);
-      localStorage.setItem("selected-provider", providerId);
+      setSetting("selected-provider", providerId);
       setModelForProvider(providerId, modelValue);
       setDialogOpen(false);
       setTimeout(() => textareaRef.current?.focus(), 100);
     },
-    [setProvider, setModelForProvider, textareaRef],
+    [setProvider, setModelForProvider, setSetting, textareaRef],
   );
 
   if (!selectedSession && !currentSessionId) {

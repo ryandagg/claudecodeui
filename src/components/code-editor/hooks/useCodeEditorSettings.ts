@@ -1,75 +1,66 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
+import { useSettings } from '../../../contexts/SettingsContext';
 import {
   CODE_EDITOR_DEFAULTS,
-  CODE_EDITOR_SETTINGS_CHANGED_EVENT,
   CODE_EDITOR_STORAGE_KEYS,
 } from '../constants/settings';
 
-const readTheme = () => {
-  const savedTheme = localStorage.getItem(CODE_EDITOR_STORAGE_KEYS.theme);
-  if (!savedTheme) {
-    return CODE_EDITOR_DEFAULTS.isDarkMode;
-  }
+const parseTheme = (saved: string | null) => (
+  saved ? saved === 'dark' : CODE_EDITOR_DEFAULTS.isDarkMode
+);
 
-  return savedTheme === 'dark';
-};
+const parseBoolean = (value: string | null, defaultValue: boolean, falseValue = 'false') => (
+  value === null ? defaultValue : value !== falseValue
+);
 
-const readBoolean = (storageKey: string, defaultValue: boolean, falseValue = 'false') => {
-  const value = localStorage.getItem(storageKey);
-  if (value === null) {
-    return defaultValue;
-  }
+const parseWordWrap = (saved: string | null) => saved === 'true';
 
-  return value !== falseValue;
-};
-
-const readWordWrap = () => {
-  return localStorage.getItem(CODE_EDITOR_STORAGE_KEYS.wordWrap) === 'true';
-};
-
-const readFontSize = () => {
-  const stored = localStorage.getItem(CODE_EDITOR_STORAGE_KEYS.fontSize);
-  return Number(stored ?? CODE_EDITOR_DEFAULTS.fontSize);
-};
+const parseFontSize = (saved: string | null) => Number(saved ?? CODE_EDITOR_DEFAULTS.fontSize);
 
 export const useCodeEditorSettings = () => {
-  const [isDarkMode, setIsDarkMode] = useState(readTheme);
-  const [wordWrap, setWordWrap] = useState(readWordWrap);
+  const { getSetting, setSetting, ready } = useSettings();
+
+  const [isDarkMode, setIsDarkMode] = useState(() => parseTheme(getSetting(CODE_EDITOR_STORAGE_KEYS.theme)));
+  const [wordWrap, setWordWrap] = useState(() => parseWordWrap(getSetting(CODE_EDITOR_STORAGE_KEYS.wordWrap)));
   const [minimapEnabled, setMinimapEnabled] = useState(() => (
-    readBoolean(CODE_EDITOR_STORAGE_KEYS.showMinimap, CODE_EDITOR_DEFAULTS.minimapEnabled)
+    parseBoolean(getSetting(CODE_EDITOR_STORAGE_KEYS.showMinimap), CODE_EDITOR_DEFAULTS.minimapEnabled)
   ));
   const [showLineNumbers, setShowLineNumbers] = useState(() => (
-    readBoolean(CODE_EDITOR_STORAGE_KEYS.lineNumbers, CODE_EDITOR_DEFAULTS.showLineNumbers)
+    parseBoolean(getSetting(CODE_EDITOR_STORAGE_KEYS.lineNumbers), CODE_EDITOR_DEFAULTS.showLineNumbers)
   ));
-  const [fontSize, setFontSize] = useState(readFontSize);
+  const [fontSize, setFontSize] = useState(() => parseFontSize(getSetting(CODE_EDITOR_STORAGE_KEYS.fontSize)));
+
+  const didHydrateThemeRef = useRef(false);
+  const didHydrateWordWrapRef = useRef(false);
 
   // Keep legacy behavior where the editor writes theme and wrap settings directly.
+  // Skip the first run so the pre-load default never clobbers the stored value.
   useEffect(() => {
-    localStorage.setItem(CODE_EDITOR_STORAGE_KEYS.theme, isDarkMode ? 'dark' : 'light');
-  }, [isDarkMode]);
+    if (!didHydrateThemeRef.current) {
+      didHydrateThemeRef.current = true;
+      return;
+    }
+    setSetting(CODE_EDITOR_STORAGE_KEYS.theme, isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode, setSetting]);
 
   useEffect(() => {
-    localStorage.setItem(CODE_EDITOR_STORAGE_KEYS.wordWrap, String(wordWrap));
-  }, [wordWrap]);
+    if (!didHydrateWordWrapRef.current) {
+      didHydrateWordWrapRef.current = true;
+      return;
+    }
+    setSetting(CODE_EDITOR_STORAGE_KEYS.wordWrap, String(wordWrap));
+  }, [wordWrap, setSetting]);
 
+  // Re-sync from settings once the DB load completes or the Settings modal
+  // persists a change to any of the code-editor keys.
   useEffect(() => {
-    const refreshFromStorage = () => {
-      setIsDarkMode(readTheme());
-      setWordWrap(readWordWrap());
-      setMinimapEnabled(readBoolean(CODE_EDITOR_STORAGE_KEYS.showMinimap, CODE_EDITOR_DEFAULTS.minimapEnabled));
-      setShowLineNumbers(readBoolean(CODE_EDITOR_STORAGE_KEYS.lineNumbers, CODE_EDITOR_DEFAULTS.showLineNumbers));
-      setFontSize(readFontSize());
-    };
-
-    window.addEventListener('storage', refreshFromStorage);
-    window.addEventListener(CODE_EDITOR_SETTINGS_CHANGED_EVENT, refreshFromStorage);
-
-    return () => {
-      window.removeEventListener('storage', refreshFromStorage);
-      window.removeEventListener(CODE_EDITOR_SETTINGS_CHANGED_EVENT, refreshFromStorage);
-    };
-  }, []);
+    setIsDarkMode(parseTheme(getSetting(CODE_EDITOR_STORAGE_KEYS.theme)));
+    setWordWrap(parseWordWrap(getSetting(CODE_EDITOR_STORAGE_KEYS.wordWrap)));
+    setMinimapEnabled(parseBoolean(getSetting(CODE_EDITOR_STORAGE_KEYS.showMinimap), CODE_EDITOR_DEFAULTS.minimapEnabled));
+    setShowLineNumbers(parseBoolean(getSetting(CODE_EDITOR_STORAGE_KEYS.lineNumbers), CODE_EDITOR_DEFAULTS.showLineNumbers));
+    setFontSize(parseFontSize(getSetting(CODE_EDITOR_STORAGE_KEYS.fontSize)));
+  }, [ready, getSetting]);
 
   return {
     isDarkMode,

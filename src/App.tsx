@@ -5,6 +5,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, ProtectedRoute } from './components/auth';
 import { WebSocketProvider } from './contexts/WebSocketContext';
 import { PluginsProvider } from './contexts/PluginsContext';
+import { SettingsProvider } from './contexts/SettingsContext';
 import AppContent from './components/app/AppContent';
 import i18n from './i18n/config.js';
 
@@ -103,22 +104,24 @@ export default function App() {
 
   return (
     <I18nextProvider i18n={i18n}>
-      <ThemeProvider>
-        <AuthProvider>
-          <WebSocketProvider>
-            <PluginsProvider>
-              <ProtectedRoute>
-                <Router basename={routerBasename}>
-                  <Routes>
-                    <Route path="/" element={<AppContent />} />
-                    <Route path="/session/:sessionId" element={<AppContent />} />
-                  </Routes>
-                </Router>
-              </ProtectedRoute>
-            </PluginsProvider>
-          </WebSocketProvider>
-        </AuthProvider>
-      </ThemeProvider>
+      <AuthProvider>
+        <WebSocketProvider>
+          <PluginsProvider>
+            <ProtectedRoute>
+              <SettingsProvider>
+                <ThemeProvider>
+                  <Router basename={routerBasename}>
+                    <Routes>
+                      <Route path="/" element={<AppContent />} />
+                      <Route path="/session/:sessionId" element={<AppContent />} />
+                    </Routes>
+                  </Router>
+                </ThemeProvider>
+              </SettingsProvider>
+            </ProtectedRoute>
+          </PluginsProvider>
+        </WebSocketProvider>
+      </AuthProvider>
     </I18nextProvider>
   );
 }

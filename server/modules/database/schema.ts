@@ -135,6 +135,17 @@ CREATE TABLE IF NOT EXISTS app_config (
 );
 `;
 
+export const USER_SETTINGS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, key),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
 export const REACTIONS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS reactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,4 +205,7 @@ ${APP_CONFIG_TABLE_SCHEMA_SQL}
 ${REACTIONS_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_reactions_session ON reactions(session_id);
 CREATE INDEX IF NOT EXISTS idx_reactions_created ON reactions(created_at);
+
+${USER_SETTINGS_TABLE_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
 `;

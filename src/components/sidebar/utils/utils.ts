@@ -3,11 +3,11 @@ import type { TFunction } from 'i18next';
 import type { LLMProvider, Project, ProjectSession } from '../../../types/app';
 import type { ProjectSortOrder, SettingsProject, SessionViewModel, SessionWithProvider } from '../types/types';
 
-export const readProjectSortOrder = (): ProjectSortOrder => {
-  // App-only preference in its own key (the shared `claude-settings` blob is gone now
-  // that Claude permissions live in ~/.claude/settings.json).
-  return localStorage.getItem('project-sort-order') === 'date' ? 'date' : 'name';
-};
+export const PROJECT_SORT_ORDER_KEY = 'project-sort-order';
+
+export const parseProjectSortOrder = (raw: string | null): ProjectSortOrder => (
+  raw === 'date' ? 'date' : 'name'
+);
 
 const LEGACY_STARRED_PROJECTS_STORAGE_KEY = 'starredProjects';
 
@@ -91,17 +91,9 @@ export const createSessionViewModel = (
 export const HIDDEN_SESSION_STORAGE_KEY = 'hidden-session-patterns';
 export const HIDE_WORKTREE_SESSIONS_KEY = 'hide-worktree-sessions';
 
-export const getHideWorktreeSessions = (): boolean => {
-  return localStorage.getItem(HIDE_WORKTREE_SESSIONS_KEY) !== 'false';
-};
+export const DEFAULT_HIDDEN_SESSION_PATTERNS = ['^ping$'];
 
-export const setHideWorktreeSessions = (hide: boolean): void => {
-  localStorage.setItem(HIDE_WORKTREE_SESSIONS_KEY, String(hide));
-  _hideWorktreeSessions = hide;
-  window.dispatchEvent(new StorageEvent('storage', { key: HIDE_WORKTREE_SESSIONS_KEY }));
-};
-
-let _hideWorktreeSessions = getHideWorktreeSessions();
+export const parseHideWorktreeSessions = (raw: string | null): boolean => raw !== 'false';
 
 const WORKTREE_PATH_PATTERN = /[\\/]worktrees[\\/]/;
 
@@ -109,34 +101,30 @@ export const isWorktreeProject = (project: Project): boolean => {
   return WORKTREE_PATH_PATTERN.test(project.fullPath || '');
 };
 
-export const getHiddenSessionPatterns = (): string[] => {
+export const parseHiddenSessionPatterns = (raw: string | null): string[] => {
   try {
-    return JSON.parse(localStorage.getItem(HIDDEN_SESSION_STORAGE_KEY) || '["^ping$"]') as string[];
+    return JSON.parse(raw || JSON.stringify(DEFAULT_HIDDEN_SESSION_PATTERNS)) as string[];
   } catch {
-    return ['^ping$'];
+    return [...DEFAULT_HIDDEN_SESSION_PATTERNS];
   }
 };
 
-export const setHiddenSessionPatterns = (patterns: string[]): void => {
-  localStorage.setItem(HIDDEN_SESSION_STORAGE_KEY, JSON.stringify(patterns));
-  hiddenSessionRegexes = compilePatterns(patterns);
-};
-
-const compilePatterns = (patterns: string[]): RegExp[] =>
+export const compilePatterns = (patterns: string[]): RegExp[] =>
   patterns.flatMap((p) => {
     try { return [new RegExp(p, 'i')]; } catch { return []; }
   });
 
-let hiddenSessionRegexes: RegExp[] = compilePatterns(getHiddenSessionPatterns());
-
-const isHiddenSession = (session: ProjectSession): boolean => {
+const isHiddenSession = (session: ProjectSession, hiddenSessionRegexes: RegExp[]): boolean => {
   const name = (session.summary || session.name || session.title || '').trim();
   return hiddenSessionRegexes.some((re) => re.test(name));
 };
 
-export const getAllSessions = (project: Project): SessionWithProvider[] => {
+export const getAllSessions = (
+  project: Project,
+  hiddenSessionRegexes: RegExp[] = [],
+): SessionWithProvider[] => {
   return (project.sessions || [])
-    .filter((session) => !isHiddenSession(session))
+    .filter((session) => !isHiddenSession(session, hiddenSessionRegexes))
     .map((session) => ({
       ...session,
       __provider: getSessionProvider(session),

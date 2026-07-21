@@ -26,23 +26,6 @@ import {
     getPendingApprovalsForSession,
 } from './claude-sdk.js';
 import {
-    spawnCursor,
-    abortCursorSession,
-} from './cursor-cli.js';
-import {
-    queryCodex,
-    abortCodexSession,
-} from './openai-codex.js';
-import {
-    spawnGemini,
-    abortGeminiSession,
-} from './gemini-cli.js';
-import {
-    spawnOpenCode,
-    abortOpenCodeSession,
-} from './opencode-cli.js';
-import sessionManager from './sessionManager.js';
-import {
     stripAnsiSequences,
     normalizeDetectedUrl,
     extractUrlsFromText,
@@ -50,23 +33,16 @@ import {
 } from './utils/url-detection.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
-import cursorRoutes from './routes/cursor.js';
-import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
 import commandsRoutes from './routes/commands.js';
 import settingsRoutes from './routes/settings.js';
 import reactionsRoutes from './routes/reactions.js';
-import agentRoutes from './routes/agent.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
 import userRoutes from './routes/user.js';
-import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import voiceRoutes from './voice-proxy.js';
-import browserUseRoutes from './modules/browser-use/browser-use.routes.js';
-import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js';
-import { browserUseService } from './modules/browser-use/browser-use.service.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, projectsDb, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './services/vapid-keys.js';
@@ -115,32 +91,17 @@ const wss = createWebSocketServer(server, {
     chat: {
         spawnFns: {
             claude: queryClaudeSDK,
-            cursor: spawnCursor,
-            codex: queryCodex,
-            gemini: spawnGemini,
-            opencode: spawnOpenCode,
         },
         abortFns: {
             claude: abortClaudeSDKSession,
-            cursor: abortCursorSession,
-            codex: abortCodexSession,
-            gemini: abortGeminiSession,
-            opencode: abortOpenCodeSession,
         },
         resolveToolApproval,
         getPendingApprovalsForSession,
     },
     shell: {
-        resolveProviderSessionId: (sessionId, provider) => {
+        resolveProviderSessionId: (sessionId) => {
             const dbSession = sessionsDb.getSessionById(sessionId);
-            const legacyGeminiSession =
-                provider === 'gemini' ? sessionManager.getSession(sessionId) : null;
-
-            if (dbSession) {
-                return dbSession.provider_session_id ?? legacyGeminiSession?.cliSessionId ?? null;
-            }
-
-            return legacyGeminiSession?.cliSessionId;
+            return dbSession?.provider_session_id ?? null;
         },
         stripAnsiSequences,
         normalizeDetectedUrl,
@@ -189,11 +150,6 @@ app.use('/api/projects', authenticateToken, projectModuleRoutes);
 // Git API Routes (protected)
 app.use('/api/git', authenticateToken, gitRoutes);
 
-// Cursor API Routes (protected)
-app.use('/api/cursor', authenticateToken, cursorRoutes);
-
-// TaskMaster API Routes (protected)
-app.use('/api/taskmaster', authenticateToken, taskmasterRoutes);
 
 // MCP utilities
 app.use('/api/mcp-utils', authenticateToken, mcpUtilsRoutes);
@@ -212,23 +168,14 @@ app.use('/api/user', authenticateToken, userRoutes);
 // Reactions API Routes (protected)
 app.use('/api/reactions', authenticateToken, reactionsRoutes);
 
-// Gemini API Routes (protected)
-app.use('/api/gemini', authenticateToken, geminiRoutes);
 
 // Plugins API Routes (protected)
 app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
-// Browser MCP bridge API (local token protected)
-app.use('/api/browser-use-mcp', browserUseMcpRoutes);
-
-// Browser API Routes (protected)
-app.use('/api/browser-use', authenticateToken, browserUseRoutes);
 
 // Unified provider MCP routes (protected)
 app.use('/api/providers', authenticateToken, providerRoutes);
 
-// Agent API Routes (uses API key authentication)
-app.use('/api/agent', agentRoutes);
 
 app.use('/api/voice', authenticateToken, voiceRoutes);
 

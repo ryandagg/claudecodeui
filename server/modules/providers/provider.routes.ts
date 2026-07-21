@@ -283,10 +283,6 @@ const parseProvider = (value: unknown): LLMProvider => {
   const normalized = normalizeProviderParam(value);
   if (
     normalized === 'claude'
-    || normalized === 'codex'
-    || normalized === 'cursor'
-    || normalized === 'gemini'
-    || normalized === 'opencode'
   ) {
     return normalized;
   }

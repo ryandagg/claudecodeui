@@ -284,6 +284,8 @@ function createWordMatcher(
   return { matchesQuery, buildSnippet };
 }
 
+const MAX_TOOL_RESULT_SEARCH_LENGTH = 10_000;
+
 function extractClaudeText(content: unknown): string {
   if (typeof content === 'string') {
     return content;
@@ -304,11 +306,17 @@ function extractClaudeText(content: unknown): string {
       parts.push(part.text);
     } else if (part.type === 'tool_result') {
       if (typeof part.content === 'string') {
-        parts.push(part.content);
+        const text = part.content.length > MAX_TOOL_RESULT_SEARCH_LENGTH
+          ? part.content.slice(0, MAX_TOOL_RESULT_SEARCH_LENGTH)
+          : part.content;
+        parts.push(text);
       } else if (Array.isArray(part.content)) {
         for (const inner of part.content as AnyRecord[]) {
           if (inner?.type === 'text' && typeof inner.text === 'string') {
-            parts.push(inner.text);
+            const text = inner.text.length > MAX_TOOL_RESULT_SEARCH_LENGTH
+              ? inner.text.slice(0, MAX_TOOL_RESULT_SEARCH_LENGTH)
+              : inner.text;
+            parts.push(text);
           }
         }
       }

@@ -120,6 +120,7 @@ export function useChatSessionState({
   const isUserScrolledUpRef = useRef(false);
   const [tokenBudget, setTokenBudget] = useState<Record<string, unknown> | null>(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState(INITIAL_VISIBLE_MESSAGES);
+  const [searchWindow, setSearchWindow] = useState<{ start: number; end: number } | null>(null);
   const [allMessagesLoaded, setAllMessagesLoaded] = useState(false);
   const [isLoadingAllMessages, setIsLoadingAllMessages] = useState(false);
   const [loadAllJustFinished, setLoadAllJustFinished] = useState(false);
@@ -428,6 +429,7 @@ export function useChatSessionState({
       pendingInitialScrollRef.current = true;
       setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
     }
+    setSearchWindow(null);
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
     isUserScrolledUpRef.current = false;
@@ -641,27 +643,35 @@ export function useChatSessionState({
     setSearchTarget(null);
 
     const scrollToTarget = async () => {
-      if (!allMessagesLoadedRef.current && selectedSession && selectedProject) {
-          try {
-            // Load all messages into the store for search navigation
-            const slot = await sessionStore.fetchFromServer(selectedSession.id, {
-              limit: null,
-              offset: 0,
-            });
-            if (slot) {
-              setHasMoreMessages(false);
-              setTotalMessages(slot.total);
-              messagesOffsetRef.current = slot.total;
-              setVisibleMessageCount(Infinity);
-              setAllMessagesLoaded(true);
-              allMessagesLoadedRef.current = true;
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-          } catch {
-            // Fall through and scroll in current messages
+      const SEARCH_WINDOW_PADDING = 25;
+
+      // Find the target message index by timestamp in the already-loaded array.
+      let targetIndex = -1;
+      if (target.timestamp) {
+        const targetDate = new Date(target.timestamp).getTime();
+        if (!Number.isNaN(targetDate)) {
+          let closestDiff = Infinity;
+          for (let i = 0; i < chatMessages.length; i++) {
+            const msg = chatMessages[i];
+            const msgTime = new Date(msg.timestamp as string | number).getTime();
+            if (Number.isNaN(msgTime)) continue;
+            const diff = Math.abs(msgTime - targetDate);
+            if (diff < closestDiff) { closestDiff = diff; targetIndex = i; }
           }
+        }
       }
-      setVisibleMessageCount(Infinity);
+
+      // Set a narrow rendering window around the target instead of all messages.
+      if (targetIndex >= 0) {
+        const start = Math.max(0, targetIndex - SEARCH_WINDOW_PADDING);
+        const end = Math.min(chatMessages.length, targetIndex + SEARCH_WINDOW_PADDING + 1);
+        setSearchWindow({ start, end });
+      } else {
+        setSearchWindow({ start: 0, end: Math.min(chatMessages.length, 50) });
+      }
+
+      // Let React render the windowed slice.
+      await new Promise(resolve => setTimeout(resolve, 80));
 
       const findAndScroll = (retriesLeft: number) => {
         const container = scrollContainerRef.current;
@@ -669,6 +679,7 @@ export function useChatSessionState({
 
         let targetElement: Element | null = null;
 
+        // Strategy 1: Find by visible text content (works for user/assistant text).
         if (target.snippet) {
           const cleanSnippet = target.snippet.replace(/^\.{3}/, '').replace(/\.{3}$/, '').trim();
           const searchPhrase = cleanSnippet.slice(0, 80).toLowerCase().trim();
@@ -681,15 +692,20 @@ export function useChatSessionState({
           }
         }
 
+        // Strategy 2: Find by timestamp (works for tool results and collapsed content).
         if (!targetElement && target.timestamp) {
           const targetDate = new Date(target.timestamp).getTime();
-          const messageElements = container.querySelectorAll('[data-message-timestamp]');
-          let closestDiff = Infinity;
-          for (const el of messageElements) {
-            const ts = el.getAttribute('data-message-timestamp');
-            if (!ts) continue;
-            const diff = Math.abs(new Date(ts).getTime() - targetDate);
-            if (diff < closestDiff) { closestDiff = diff; targetElement = el; }
+          if (!Number.isNaN(targetDate)) {
+            const messageElements = container.querySelectorAll('[data-message-timestamp]');
+            let closestDiff = Infinity;
+            for (const el of messageElements) {
+              const ts = el.getAttribute('data-message-timestamp');
+              if (!ts) continue;
+              const elDate = new Date(ts).getTime();
+              if (Number.isNaN(elDate)) continue;
+              const diff = Math.abs(elDate - targetDate);
+              if (diff < closestDiff) { closestDiff = diff; targetElement = el; }
+            }
           }
         }
 
@@ -699,8 +715,6 @@ export function useChatSessionState({
           setTimeout(() => targetElement?.classList.remove('search-highlight-flash'), 4000);
           searchScrollActiveRef.current = false;
 
-          // If the target is a collapsed tool group, expand it so the matched
-          // content becomes visible.
           if (targetElement.classList.contains('tool')) {
             const expandBtn = targetElement.querySelector('button[aria-expanded="false"]');
             if (expandBtn instanceof HTMLElement) {
@@ -708,13 +722,13 @@ export function useChatSessionState({
             }
           }
         } else if (retriesLeft > 0) {
-          setTimeout(() => findAndScroll(retriesLeft - 1), 200);
+          setTimeout(() => findAndScroll(retriesLeft - 1), 150);
         } else {
           searchScrollActiveRef.current = false;
         }
       };
 
-      setTimeout(() => findAndScroll(15), 150);
+      setTimeout(() => findAndScroll(5), 80);
     };
 
     scrollToTarget();
@@ -745,21 +759,17 @@ export function useChatSessionState({
   }, [selectedProject, selectedSession?.id]);
 
   const visibleMessages = useMemo(() => {
+    if (searchWindow) {
+      return chatMessages.slice(searchWindow.start, searchWindow.end);
+    }
+
     const total = chatMessages.length;
     if (total <= visibleMessageCount) return chatMessages;
 
-    // Batched front-trim. Slicing to exactly `visibleMessageCount` on every
-    // render drops the oldest visible message on *each* new streamed message,
-    // which makes the viewport jump constantly. Instead, only trim from the
-    // front in whole batches of MESSAGES_PER_PAGE: the window is allowed to
-    // grow up to +MESSAGES_PER_PAGE past the cap, then snaps back down. Net
-    // effect — one trim per ~20 additions, not one per message. Pagination is
-    // unaffected: it still works by raising `visibleMessageCount` itself, and
-    // load-all sets it to Infinity (so `total <= count` short-circuits above).
     const overflow = total - visibleMessageCount;
     const dropFromFront = Math.ceil(overflow / MESSAGES_PER_PAGE) * MESSAGES_PER_PAGE;
     return chatMessages.slice(dropFromFront);
-  }, [chatMessages, visibleMessageCount]);
+  }, [chatMessages, visibleMessageCount, searchWindow]);
 
   useEffect(() => {
     if (!autoScrollToBottom && scrollContainerRef.current) {
@@ -844,6 +854,7 @@ export function useChatSessionState({
   const loadAllMessages = useCallback(async () => {
     if (!selectedSession || !selectedProject) return;
     if (isLoadingAllMessages) return;
+    setSearchWindow(null);
     const requestSessionId = selectedSession.id;
     allMessagesLoadedRef.current = true;
     isLoadingMoreRef.current = true;
@@ -890,6 +901,10 @@ export function useChatSessionState({
     }
   }, [selectedSession, selectedProject, isLoadingAllMessages, currentSessionId, sessionStore]);
 
+  const dismissSearchWindow = useCallback(() => {
+    setSearchWindow(null);
+  }, []);
+
   const loadEarlierMessages = useCallback(() => {
     setVisibleMessageCount((prev) => prev + 100);
   }, []);
@@ -914,6 +929,8 @@ export function useChatSessionState({
     setTokenBudget,
     visibleMessageCount,
     visibleMessages,
+    searchWindow,
+    dismissSearchWindow,
     loadEarlierMessages,
     loadAllMessages,
     allMessagesLoaded,

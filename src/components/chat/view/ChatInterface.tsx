@@ -114,6 +114,8 @@ function ChatInterface({
     setTokenBudget,
     visibleMessageCount,
     visibleMessages,
+    searchWindow,
+    dismissSearchWindow,
     loadEarlierMessages,
     loadAllMessages,
     allMessagesLoaded,
@@ -390,6 +392,34 @@ function ChatInterface({
           selectedProject={selectedProject}
         />
 
+        {searchWindow && (
+          <div className="flex items-center justify-between border-t border-border/60 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/30">
+            <span className="text-xs text-amber-800 dark:text-amber-200">
+              Viewing search result (messages {searchWindow.start + 1}&ndash;{searchWindow.end} of {chatMessages.length})
+            </span>
+            <button
+              className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              onClick={dismissSearchWindow}
+            >
+              Return to conversation
+            </button>
+          </div>
+        )}
+
+        {!searchWindow && isUserScrolledUp && chatMessages.length > 0 && (
+          <div className="flex items-center justify-between border-t border-border/60 bg-muted/80 px-4 py-2 dark:bg-muted/40">
+            <span className="text-xs text-muted-foreground">
+              {t('input.scrolledUp', { defaultValue: 'Viewing earlier messages' })}
+            </span>
+            <button
+              className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              onClick={scrollToBottomAndReset}
+            >
+              {t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
+            </button>
+          </div>
+        )}
+
         <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
@@ -407,9 +437,6 @@ function ChatInterface({
           onToggleCommandMenu={handleToggleCommandMenu}
           hasInput={Boolean(input.trim())}
           onClearInput={handleClearInput}
-          isUserScrolledUp={isUserScrolledUp}
-          hasMessages={chatMessages.length > 0}
-          onScrollToBottom={scrollToBottomAndReset}
           onSubmit={handleSubmit}
           isDragActive={isDragActive}
           attachedImages={attachedImages}

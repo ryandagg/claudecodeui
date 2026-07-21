@@ -16,7 +16,6 @@ import {
   ImageIcon,
   MessageSquareIcon,
   XIcon,
-  ArrowDownIcon,
   ArrowUpIcon,
   Loader2,
   CopyIcon,
@@ -86,9 +85,6 @@ interface ChatComposerProps {
   onToggleCommandMenu: () => void;
   hasInput: boolean;
   onClearInput: () => void;
-  isUserScrolledUp: boolean;
-  hasMessages: boolean;
-  onScrollToBottom: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
   isDragActive: boolean;
   attachedImages: File[];
@@ -146,9 +142,6 @@ export default function ChatComposer({
   onToggleCommandMenu,
   hasInput,
   onClearInput,
-  isUserScrolledUp,
-  hasMessages,
-  onScrollToBottom,
   onSubmit,
   isDragActive,
   attachedImages,
@@ -328,18 +321,6 @@ export default function ChatComposer({
       )}
 
       {!hasQuestionPanel && <div className="relative mx-auto max-w-4xl">
-        {isUserScrolledUp && hasMessages && (
-          <div className="absolute -top-10 left-0 right-0 z-50 flex justify-center">
-            <button
-              type="button"
-              onClick={onScrollToBottom}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md ring-1 ring-black/5 transition-all duration-200 hover:bg-accent hover:text-accent-foreground dark:ring-white/10"
-              title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
-            >
-              <ArrowDownIcon className="h-4 w-4" />
-            </button>
-          </div>
-        )}
         {showFileDropdown && filteredFiles.length > 0 && (
           <div className="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-48 overflow-y-auto rounded-xl border border-border/50 bg-card/95 shadow-lg backdrop-blur-md">
             {filteredFiles.map((file, index) => (

@@ -20,8 +20,8 @@ Built on [CloudCLI UI](https://github.com/siteboon/claudecodeui), licensed AGPL-
 
 ```sh
 # Clone and install
-git clone https://github.com/nicandgus/claude-gui.git
-cd claude-gui
+git clone https://github.com/ryandagg/claudecodeui.git
+cd claudecodeui
 npm install
 
 # Start dev server (from a shell with Bedrock env vars set)
@@ -47,7 +47,7 @@ The server is a thin bridge: it spawns Claude Code SDK processes that inherit yo
 |---------|---------|-------------|
 | `SERVER_PORT` | `3001` | Backend API server port |
 | `VITE_PORT` | `5173` | Frontend dev server port |
-| `DATABASE_PATH` | `~/.claude-gui/auth.db` | SQLite database location |
+| `DATABASE_PATH` | `~/.claudecodeui/auth.db` | SQLite database location |
 
 All Claude-specific configuration (model, permissions, hooks, MCP servers) is read from your standard `~/.claude/settings.json` and project-level `CLAUDE.md` files — the same files the terminal `claude` CLI uses.
 

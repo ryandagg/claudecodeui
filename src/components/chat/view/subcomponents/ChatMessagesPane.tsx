@@ -11,6 +11,8 @@ import type {
 } from '../../../../types/app';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '../../utils/toolGrouping';
+import { useMessageReactions } from '../../hooks/useMessageReactions';
+import type { ReactionType } from './MessageReactions';
 
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
@@ -122,6 +124,17 @@ function ChatMessagesPane({
   const intrinsicKeyMapRef = useRef<Map<string, string>>(new Map());
   const generatedMessageKeyCounterRef = useRef(0);
   const groupedVisibleMessages = useMemo(() => groupConsecutiveTools(visibleMessages, Boolean(showThinking)), [visibleMessages, showThinking]);
+
+  const sessionId = selectedSession?.id || currentSessionId || null;
+  const { getReaction, addReaction, removeReaction } = useMessageReactions(sessionId);
+
+  const messageIndexMap = useMemo(() => {
+    const map = new WeakMap<ChatMessage, number>();
+    for (let i = 0; i < chatMessages.length; i++) {
+      map.set(chatMessages[i], i);
+    }
+    return map;
+  }, [chatMessages]);
 
   // Keep keys stable across message array recreations so existing component
   // instances retain local state (e.g. collapsible open/closed).
@@ -278,6 +291,9 @@ function ChatMessagesPane({
               const messagePrevMessage = prevMessage;
               prevMessage = item;
 
+              const msgIndex = messageIndexMap.get(item) ?? -1;
+              const existingReaction = msgIndex >= 0 ? getReaction(msgIndex) : null;
+
               return (
                 <MessageComponent
                   key={getMessageKey(item)}
@@ -292,6 +308,15 @@ function ChatMessagesPane({
                   showThinking={showThinking}
                   selectedProject={selectedProject}
                   provider={provider}
+                  messageIndex={msgIndex}
+                  existingReaction={existingReaction ? { id: existingReaction.id, reaction: existingReaction.reaction as ReactionType } : null}
+                  onReact={async (reaction: ReactionType) => {
+                    if (msgIndex < 0) return;
+                    await addReaction(msgIndex, item.type, String(item.content || '').slice(0, 500), reaction);
+                  }}
+                  onRemoveReaction={async (id: number) => {
+                    await removeReaction(id, msgIndex);
+                  }}
                 />
               );
             });

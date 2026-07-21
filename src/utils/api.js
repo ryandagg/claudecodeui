@@ -258,6 +258,27 @@ export const api = {
       }),
   },
 
+  // Reactions
+  reactions: {
+    add: (sessionId, messageIndex, messageRole, messageContent, reaction) =>
+      authenticatedFetch('/api/reactions', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId, messageIndex, messageRole, messageContent, reaction }),
+      }),
+    remove: (id) =>
+      authenticatedFetch(`/api/reactions/${id}`, { method: 'DELETE' }),
+    forSession: (sessionId) =>
+      authenticatedFetch(`/api/reactions/session/${encodeURIComponent(sessionId)}`),
+    list: ({ reaction, limit, offset } = {}) => {
+      const params = new URLSearchParams();
+      if (reaction) params.set('reaction', reaction);
+      if (limit) params.set('limit', String(limit));
+      if (offset) params.set('offset', String(offset));
+      const qs = params.toString();
+      return authenticatedFetch(`/api/reactions${qs ? `?${qs}` : ''}`);
+    },
+  },
+
   // Generic GET method for any endpoint
   get: (endpoint) => authenticatedFetch(`/api${endpoint}`),
 

@@ -135,6 +135,18 @@ CREATE TABLE IF NOT EXISTS app_config (
 );
 `;
 
+export const REACTIONS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS reactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    message_index INTEGER NOT NULL,
+    message_role TEXT NOT NULL,
+    message_content TEXT,
+    reaction TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -178,4 +190,8 @@ CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id);
 ${LAST_SCANNED_AT_SQL}
 
 ${APP_CONFIG_TABLE_SCHEMA_SQL}
+
+${REACTIONS_TABLE_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_reactions_session ON reactions(session_id);
+CREATE INDEX IF NOT EXISTS idx_reactions_created ON reactions(created_at);
 `;

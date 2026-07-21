@@ -270,9 +270,6 @@ function Sidebar({
                 ...searchTarget,
               };
               if (project) {
-                // Set project context without navigating away — handleSessionClick
-                // will navigate directly to the session URL.
-                onProjectSelect(project);
                 const sessions = getProjectSessions(project);
                 const existing = sessions.find(s => s.id === sessionId);
                 if (existing) {

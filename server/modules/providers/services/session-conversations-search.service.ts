@@ -293,10 +293,29 @@ function extractClaudeText(content: unknown): string {
     return '';
   }
 
-  return content
-    .filter((part: AnyRecord) => part?.type === 'text' && typeof part?.text === 'string')
-    .map((part: AnyRecord) => String(part.text))
-    .join(' ');
+  const parts: string[] = [];
+
+  for (const part of content as AnyRecord[]) {
+    if (!part) {
+      continue;
+    }
+
+    if (part.type === 'text' && typeof part.text === 'string') {
+      parts.push(part.text);
+    } else if (part.type === 'tool_result') {
+      if (typeof part.content === 'string') {
+        parts.push(part.content);
+      } else if (Array.isArray(part.content)) {
+        for (const inner of part.content as AnyRecord[]) {
+          if (inner?.type === 'text' && typeof inner.text === 'string') {
+            parts.push(inner.text);
+          }
+        }
+      }
+    }
+  }
+
+  return parts.join(' ');
 }
 
 function extractTaggedContent(content: string, tagName: string): string | null {

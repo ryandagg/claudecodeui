@@ -698,6 +698,15 @@ export function useChatSessionState({
           targetElement.classList.add('search-highlight-flash');
           setTimeout(() => targetElement?.classList.remove('search-highlight-flash'), 4000);
           searchScrollActiveRef.current = false;
+
+          // If the target is a collapsed tool group, expand it so the matched
+          // content becomes visible.
+          if (targetElement.classList.contains('tool')) {
+            const expandBtn = targetElement.querySelector('button[aria-expanded="false"]');
+            if (expandBtn instanceof HTMLElement) {
+              expandBtn.click();
+            }
+          }
         } else if (retriesLeft > 0) {
           setTimeout(() => findAndScroll(retriesLeft - 1), 200);
         } else {

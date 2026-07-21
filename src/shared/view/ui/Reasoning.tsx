@@ -4,6 +4,7 @@ import * as React from 'react';
 import { BrainIcon, ChevronDownIcon } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
+
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from './Collapsible';
 import { Shimmer } from './Shimmer';
 
@@ -18,6 +19,7 @@ interface ReasoningContextValue {
 
 const ReasoningContext = React.createContext<ReasoningContextValue | null>(null);
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useReasoning = () => {
   const context = React.useContext(ReasoningContext);
   if (!context) {

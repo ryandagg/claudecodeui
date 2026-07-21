@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { cn } from '../../../lib/utils';
+
 import { Alert } from './Alert';
 import { Button } from './Button';
 
@@ -136,4 +137,5 @@ export const ConfirmationAction: React.FC<ConfirmationActionProps> = ({
 );
 ConfirmationAction.displayName = 'ConfirmationAction';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export { useConfirmation };

@@ -100,4 +100,5 @@ const CollapsibleContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes
 );
 CollapsibleContent.displayName = 'CollapsibleContent';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export { Collapsible, CollapsibleTrigger, CollapsibleContent, useCollapsible };

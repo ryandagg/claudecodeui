@@ -12,8 +12,8 @@ import type {
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '../../utils/toolGrouping';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
-import type { ReactionType } from './MessageReactions';
 
+import type { ReactionType } from './MessageReactions';
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 import ToolGroupContainer from './ToolGroupContainer';

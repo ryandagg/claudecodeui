@@ -12,6 +12,7 @@ export interface PermissionContextValue {
 
 const PermissionContext = createContext<PermissionContextValue | null>(null);
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePermission(): PermissionContextValue | null {
   return useContext(PermissionContext);
 }

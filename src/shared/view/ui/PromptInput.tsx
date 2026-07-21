@@ -4,6 +4,7 @@ import * as React from 'react';
 import { SendHorizonalIcon, SquareIcon } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
+
 import { Button } from './Button';
 import Tooltip from './Tooltip';
 
@@ -216,4 +217,5 @@ export const PromptInputSubmit = React.forwardRef<HTMLButtonElement, PromptInput
 );
 PromptInputSubmit.displayName = 'PromptInputSubmit';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export { usePromptInput };

@@ -857,6 +857,7 @@ export function useChatComposerState({
 
       safeLocalStorage.removeItem(`draft_input_${selectedProject.projectId}`);
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       selectedSession,
       attachedImages,

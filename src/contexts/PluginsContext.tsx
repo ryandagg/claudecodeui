@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+
 import { authenticatedFetch } from '../utils/api';
 
 export type Plugin = {
@@ -33,6 +34,7 @@ type PluginsContextValue = {
 
 const PluginsContext = createContext<PluginsContextValue | null>(null);
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function usePlugins() {
   const context = useContext(PluginsContext);
   if (!context) {

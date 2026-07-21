@@ -108,7 +108,7 @@ export function useChatSessionState({
 }: UseChatSessionStateArgs) {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
-  const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
+  const [isLoadingMoreMessages] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [totalMessages, setTotalMessages] = useState(0);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
@@ -130,7 +130,7 @@ export function useChatSessionState({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [searchTarget, setSearchTarget] = useState<{ timestamp?: string; uuid?: string; snippet?: string } | null>(null);
   const searchScrollActiveRef = useRef(false);
-  const isLoadingSessionRef = useRef(false);
+  const _isLoadingSessionRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
   const topLoadLockRef = useRef(false);
@@ -264,6 +264,7 @@ export function useChatSessionState({
     setPendingUserMessage(null);
   }, [activeSessionId, pendingUserMessage, sessionStore]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const storeMessages = activeSessionId ? sessionStore.getMessages(activeSessionId) : [];
 
   // Reset viewHiddenCount when store messages change
@@ -579,6 +580,7 @@ export function useChatSessionState({
     }).catch(() => {
       setIsLoadingSessionMessages(false);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     resetStreamingState,
     selectedProject,

@@ -1136,6 +1136,11 @@ export function useChatComposerState({
     });
   }, [canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
 
+  const sendQueuedDraftNow = useCallback(() => {
+    if (!queuedDraft) return;
+    handleAbortSession();
+  }, [queuedDraft, handleAbortSession]);
+
   const handleGrantToolPermission = useCallback(
     async (suggestion: { entry: string; toolName: string }) => {
       if (!suggestion || provider !== 'claude') {
@@ -1234,5 +1239,6 @@ export function useChatComposerState({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    sendQueuedDraftNow,
   };
 }

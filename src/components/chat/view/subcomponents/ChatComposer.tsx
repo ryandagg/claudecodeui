@@ -123,6 +123,7 @@ interface ChatComposerProps {
   queuedDraft: QueuedDraft | null;
   onEditQueuedDraft: () => void;
   onDeleteQueuedDraft: () => void;
+  onSendQueuedDraftNow: () => void;
 }
 
 export default function ChatComposer({
@@ -180,6 +181,7 @@ export default function ChatComposer({
   queuedDraft,
   onEditQueuedDraft,
   onDeleteQueuedDraft,
+  onSendQueuedDraftNow,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const [pathCopied, setPathCopied] = useState(false);
@@ -364,6 +366,7 @@ export default function ChatComposer({
             imageCount={queuedDraft.images.length}
             onEdit={onEditQueuedDraft}
             onDelete={onDeleteQueuedDraft}
+            onSendNow={onSendQueuedDraftNow}
           />
         )}
 

@@ -1,14 +1,15 @@
 import { useTranslation } from 'react-i18next';
-import { PencilIcon, XIcon } from 'lucide-react';
+import { PencilIcon, XIcon, SendIcon } from 'lucide-react';
 
 interface QueuedMessageCardProps {
   content: string;
   imageCount?: number;
   onEdit: () => void;
   onDelete: () => void;
+  onSendNow: () => void;
 }
 
-export default function QueuedMessageCard({ content, imageCount = 0, onEdit, onDelete }: QueuedMessageCardProps) {
+export default function QueuedMessageCard({ content, imageCount = 0, onEdit, onDelete, onSendNow }: QueuedMessageCardProps) {
   const { t } = useTranslation('chat');
 
   return (
@@ -30,6 +31,15 @@ export default function QueuedMessageCard({ content, imageCount = 0, onEdit, onD
           )}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={onSendNow}
+            aria-label={t('input.queue.sendNow', { defaultValue: 'Send now (interrupts current turn)' })}
+            title={t('input.queue.sendNow', { defaultValue: 'Send now (interrupts current turn)' })}
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+          >
+            <SendIcon className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={onEdit}

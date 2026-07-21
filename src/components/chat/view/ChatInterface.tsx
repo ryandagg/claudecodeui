@@ -208,6 +208,7 @@ function ChatInterface({
     queuedDraft,
     editQueuedDraft,
     deleteQueuedDraft,
+    sendQueuedDraftNow,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -490,6 +491,7 @@ function ChatInterface({
           queuedDraft={queuedDraft}
           onEditQueuedDraft={editQueuedDraft}
           onDeleteQueuedDraft={deleteQueuedDraft}
+          onSendQueuedDraftNow={sendQueuedDraftNow}
         />
       </div>
 

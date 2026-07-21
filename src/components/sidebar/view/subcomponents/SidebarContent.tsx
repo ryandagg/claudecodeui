@@ -45,7 +45,7 @@ type ConversationSessionResult = {
   matches: { role: string; snippet: string; highlights: { start: number; end: number }[] }[];
 };
 
-function CollapsibleSessionResult({ session, onNavigate }: { session: ConversationSessionResult; onNavigate: () => void }) {
+function CollapsibleSessionResult({ session, onNavigate, onMatchClick }: { session: ConversationSessionResult; onNavigate: () => void; onMatchClick: (matchIndex: number) => void }) {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -81,7 +81,11 @@ function CollapsibleSessionResult({ session, onNavigate }: { session: Conversati
       {expanded && (
         <div className="mt-1 space-y-1 pl-5">
           {session.matches.map((match, idx) => (
-            <div key={idx} className="flex items-start gap-1">
+            <button
+              key={idx}
+              className="flex w-full items-start gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/50"
+              onClick={() => onMatchClick(idx)}
+            >
               <span className="mt-0.5 flex-shrink-0 text-[10px] font-normal uppercase text-muted-foreground/60">
                 {match.role === 'user' ? 'U' : 'A'}
               </span>
@@ -89,7 +93,7 @@ function CollapsibleSessionResult({ session, onNavigate }: { session: Conversati
                 snippet={match.snippet}
                 highlights={match.highlights}
               />
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -184,6 +188,7 @@ type SidebarContentProps = {
   onSearchFilterChange: (value: string) => void;
   onClearSearchFilter: () => void;
   searchMode: SidebarSearchMode;
+  favoritesOnly: boolean;
   onSearchModeChange: (mode: SidebarSearchMode) => void;
   conversationResults: ConversationSearchResults | null;
   isSearching: boolean;
@@ -218,6 +223,7 @@ export default function SidebarContent({
   onSearchFilterChange,
   onClearSearchFilter,
   searchMode,
+  favoritesOnly,
   onSearchModeChange,
   conversationResults,
   isSearching,
@@ -256,6 +262,7 @@ export default function SidebarContent({
         onSearchFilterChange={onSearchFilterChange}
         onClearSearchFilter={onClearSearchFilter}
         searchMode={searchMode}
+        favoritesOnly={favoritesOnly}
         onSearchModeChange={onSearchModeChange}
         onRefresh={onRefresh}
         isRefreshing={isRefreshing}
@@ -327,6 +334,13 @@ export default function SidebarContent({
                         session.provider || session.matches[0]?.provider || 'claude',
                         session.matches[0]?.timestamp,
                         session.matches[0]?.snippet
+                      )}
+                      onMatchClick={(matchIndex) => onConversationResultClick(
+                        projectResult.projectId,
+                        session.sessionId,
+                        session.provider || session.matches[matchIndex]?.provider || 'claude',
+                        session.matches[matchIndex]?.timestamp,
+                        session.matches[matchIndex]?.snippet
                       )}
                     />
                   ))}
@@ -575,6 +589,7 @@ export default function SidebarContent({
           <SidebarConversationList
             projectListProps={projectListProps}
             searchFilter={searchFilter}
+            favoritesOnly={favoritesOnly}
             t={t}
           />
         ) : (

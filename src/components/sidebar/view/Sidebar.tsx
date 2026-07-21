@@ -62,6 +62,8 @@ function Sidebar({
     searchFilter,
     searchMode,
     setSearchMode,
+    favoritesOnly,
+    setFavoritesOnly,
     conversationResults,
     isSearching,
     searchProgress,
@@ -232,7 +234,13 @@ function Sidebar({
             onSearchFilterChange={setSearchFilter}
             onClearSearchFilter={() => setSearchFilter('')}
             searchMode={searchMode}
+            favoritesOnly={favoritesOnly}
             onSearchModeChange={(mode) => {
+              if (mode === 'conversations' && searchMode === 'conversations') {
+                setFavoritesOnly(prev => !prev);
+                return;
+              }
+              setFavoritesOnly(false);
               setSearchMode(mode);
               if (mode === 'projects') clearConversationResults();
             }}
@@ -252,10 +260,6 @@ function Sidebar({
               );
             }}
             onConversationResultClick={(projectId: string | null, sessionId: string, provider: string, messageTimestamp?: string | null, messageSnippet?: string | null) => {
-              // `projectId` (DB key) is the canonical identifier post-migration.
-              // The server emits null when it can't resolve a project row for
-              // the search hit; treat that as "no project" and still navigate
-              // to the session so the user can open it from the URL.
               const resolvedProvider = (provider || 'claude') as LLMProvider;
               const project = projectId ? projects.find(p => p.projectId === projectId) : null;
               const searchTarget = { __searchTargetTimestamp: messageTimestamp || null, __searchTargetSnippet: messageSnippet || null };
@@ -266,7 +270,9 @@ function Sidebar({
                 ...searchTarget,
               };
               if (project) {
-                handleProjectSelect(project);
+                // Set project context without navigating away — handleSessionClick
+                // will navigate directly to the session URL.
+                onProjectSelect(project);
                 const sessions = getProjectSessions(project);
                 const existing = sessions.find(s => s.id === sessionId);
                 if (existing) {

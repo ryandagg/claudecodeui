@@ -148,6 +148,7 @@ export function useSidebarController({
   // Local fork: default to the flat, recency-sorted Conversations view on load
   // rather than the project-grouped Projects view.
   const [searchMode, setSearchMode] = useState<SidebarSearchMode>('conversations');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [conversationResults, setConversationResults] = useState<ConversationSearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
@@ -1091,6 +1092,8 @@ export function useSidebarController({
     setEditingSessionName,
     searchMode,
     setSearchMode,
+    favoritesOnly,
+    setFavoritesOnly,
     conversationResults,
     isSearching,
     searchProgress,

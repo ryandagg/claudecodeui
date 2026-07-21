@@ -1,4 +1,4 @@
-import { Activity, Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Activity, Archive, Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, Star, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button, Input, Tooltip } from '../../../../shared/view/ui';
@@ -21,6 +21,7 @@ type SidebarHeaderProps = {
   onSearchFilterChange: (value: string) => void;
   onClearSearchFilter: () => void;
   searchMode: SidebarSearchMode;
+  favoritesOnly: boolean;
   onSearchModeChange: (mode: SidebarSearchMode) => void;
   onRefresh: () => void;
   isRefreshing: boolean;
@@ -41,6 +42,7 @@ export default function SidebarHeader({
   onSearchFilterChange,
   onClearSearchFilter,
   searchMode,
+  favoritesOnly,
   onSearchModeChange,
   onRefresh,
   isRefreshing,
@@ -123,12 +125,18 @@ export default function SidebarHeader({
                 aria-pressed={searchMode === 'conversations'}
                 className={cn(
                   "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
+                  searchMode === 'conversations' && favoritesOnly
+                    ? "bg-yellow-500/10 shadow-sm text-foreground ring-1 ring-yellow-500/30"
+                    : searchMode === 'conversations'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <MessageSquare className="h-3 w-3" />
+                {favoritesOnly && searchMode === 'conversations' ? (
+                  <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
+                ) : (
+                  <MessageSquare className="h-3 w-3" />
+                )}
                 {t('search.modeConversations')}
               </button>
               <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">
@@ -251,12 +259,18 @@ export default function SidebarHeader({
                 aria-pressed={searchMode === 'conversations'}
                 className={cn(
                   "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-normal transition-all",
-                  searchMode === 'conversations'
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
+                  searchMode === 'conversations' && favoritesOnly
+                    ? "bg-yellow-500/10 shadow-sm text-foreground ring-1 ring-yellow-500/30"
+                    : searchMode === 'conversations'
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <MessageSquare className="h-3 w-3" />
+                {favoritesOnly && searchMode === 'conversations' ? (
+                  <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
+                ) : (
+                  <MessageSquare className="h-3 w-3" />
+                )}
                 {t('search.modeConversations')}
               </button>
               <Tooltip content={t('search.runningTooltip', 'Running sessions')} position="top">

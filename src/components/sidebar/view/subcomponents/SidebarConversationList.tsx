@@ -40,6 +40,8 @@ type SidebarConversationListProps = {
   projectListProps: SidebarProjectListProps;
   /** Client-side filter applied to session title + project name. */
   searchFilter: string;
+  /** When true, only starred sessions are shown. */
+  favoritesOnly?: boolean;
   t: TFunction;
 };
 
@@ -59,6 +61,7 @@ type SidebarConversationListProps = {
 export default function SidebarConversationList({
   projectListProps,
   searchFilter,
+  favoritesOnly,
   t,
 }: SidebarConversationListProps) {
   const {
@@ -89,18 +92,11 @@ export default function SidebarConversationList({
     const flattened: FlatConversation[] = [];
     for (const project of projects) {
       for (const session of getProjectSessions(project)) {
+        if (favoritesOnly && !isSessionStarred(session)) continue;
         flattened.push({ project, session, date: getSessionDate(session) });
       }
     }
-    // Starred sessions bubble to the top; within each group, most recent first.
-    flattened.sort((a, b) => {
-      const aStarred = isSessionStarred(a.session) ? 1 : 0;
-      const bStarred = isSessionStarred(b.session) ? 1 : 0;
-      if (aStarred !== bStarred) {
-        return bStarred - aStarred;
-      }
-      return b.date.getTime() - a.date.getTime();
-    });
+    flattened.sort((a, b) => b.date.getTime() - a.date.getTime());
 
     const needle = searchFilter.trim().toLowerCase();
     if (!needle) {
@@ -111,7 +107,7 @@ export default function SidebarConversationList({
       const projectName = (project.displayName || project.path || '').toLowerCase();
       return title.includes(needle) || projectName.includes(needle);
     });
-  }, [projects, getProjectSessions, isSessionStarred, searchFilter, currentTime, t]);
+  }, [projects, getProjectSessions, isSessionStarred, favoritesOnly, searchFilter, currentTime, t]);
 
   useEffect(() => {
     if (!editingSession) {
@@ -136,12 +132,16 @@ export default function SidebarConversationList({
         <h3 className="mb-2 text-base font-medium text-foreground md:mb-1">
           {searchFilter.trim()
             ? t('search.noResults', 'No conversations match')
-            : t('conversations.emptyTitle', 'No conversations yet')}
+            : favoritesOnly
+              ? t('conversations.noFavorites', 'No favorited conversations')
+              : t('conversations.emptyTitle', 'No conversations yet')}
         </h3>
         <p className="text-sm text-muted-foreground">
           {searchFilter.trim()
             ? t('search.tryDifferentQuery', 'Try a different search term.')
-            : t('conversations.emptyDescription', 'Sessions you start will appear here, newest first.')}
+            : favoritesOnly
+              ? t('conversations.noFavoritesDescription', 'Star a conversation to see it here.')
+              : t('conversations.emptyDescription', 'Sessions you start will appear here, newest first.')}
         </p>
       </div>
     );

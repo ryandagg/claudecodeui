@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import PermissionContext from '../../../contexts/PermissionContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
@@ -41,7 +40,6 @@ function ChatInterface({
   newSessionTrigger,
   onShowAllTasks,
 }: ChatInterfaceProps) {
-  const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { subscribe } = useWebSocket();
   const { t } = useTranslation('chat');
 
@@ -314,16 +312,7 @@ function ChatInterface({
   const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
 
   if (!selectedProject) {
-    const selectedProviderLabel =
-      provider === 'cursor'
-        ? t('messageTypes.cursor')
-        : provider === 'codex'
-          ? t('messageTypes.codex')
-          : provider === 'gemini'
-            ? t('messageTypes.gemini')
-            : provider === 'opencode'
-              ? t('messageTypes.opencode', { defaultValue: 'OpenCode' })
-            : t('messageTypes.claude');
+    const selectedProviderLabel = t('messageTypes.claude');
 
     return (
       <div className="flex h-full items-center justify-center">
@@ -367,8 +356,8 @@ function ChatInterface({
           setOpenCodeModel={setOpenCodeModel}
           providerModelCatalog={providerModelCatalog}
           providerModelsLoading={providerModelsLoading}
-          tasksEnabled={tasksEnabled}
-          isTaskMasterInstalled={isTaskMasterInstalled}
+          tasksEnabled={false}
+          isTaskMasterInstalled={false}
           onShowAllTasks={onShowAllTasks}
           setInput={setInput}
           isLoadingMoreMessages={isLoadingMoreMessages}
@@ -473,18 +462,7 @@ function ChatInterface({
           onTextareaScrollSync={syncInputOverlayScroll}
           onTextareaInput={handleTextareaInput}
           onInputFocusChange={handleInputFocusChange}
-          placeholder={t('input.placeholder', {
-            provider:
-              provider === 'cursor'
-                ? t('messageTypes.cursor')
-                : provider === 'codex'
-                  ? t('messageTypes.codex')
-                  : provider === 'gemini'
-                    ? t('messageTypes.gemini')
-                    : provider === 'opencode'
-                      ? t('messageTypes.opencode', { defaultValue: 'OpenCode' })
-                    : t('messageTypes.claude'),
-          })}
+          placeholder={t('input.placeholder', { provider: t('messageTypes.claude') })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
           sessionJsonlPath={selectedSession?.jsonlPath ?? null}

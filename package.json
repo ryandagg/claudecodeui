@@ -1,12 +1,12 @@
 {
-  "name": "claude-gui",
+  "name": "claudecodeui",
   "version": "1.35.0",
   "productName": "Claude GUI",
   "description": "Local web GUI for Claude Code sessions (Bedrock passthrough)",
   "type": "module",
   "main": "dist-server/server/index.js",
   "bin": {
-    "claude-gui": "dist-server/server/cli.js"
+    "claudecodeui": "dist-server/server/cli.js"
   },
   "files": [
     "electron/",
@@ -21,10 +21,10 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicandgus/claude-gui.git"
+    "url": "git+https://github.com/ryandagg/claudecodeui.git"
   },
   "bugs": {
-    "url": "https://github.com/nicandgus/claude-gui/issues"
+    "url": "https://github.com/ryandagg/claudecodeui/issues"
   },
   "scripts": {
     "predev": "node scripts/dev-preflight.js",

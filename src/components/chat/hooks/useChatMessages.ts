@@ -190,12 +190,24 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         }
         break;
 
-      // stream_end, complete, status, permission_*, session_created
+      case 'permission_request':
+        converted.push({
+          type: 'assistant',
+          content: '',
+          timestamp: msg.timestamp,
+          isPermissionRequest: true,
+          toolName: msg.toolName || 'UnknownTool',
+          toolInput: typeof msg.input === 'string' ? msg.input : JSON.stringify(msg.input ?? '', null, 2),
+          permissionRequestId: msg.requestId,
+          ...sharedMetadata,
+        });
+        break;
+
+      // stream_end, complete, status, permission_cancelled, session_created
       // are control events — not rendered as messages
       case 'stream_end':
       case 'complete':
       case 'status':
-      case 'permission_request':
       case 'permission_cancelled':
       case 'session_created':
         // Skip — these are handled by useChatRealtimeHandlers

@@ -211,7 +211,6 @@ export function useChatRealtimeHandlers({
       const shouldPersist =
         msg.kind !== 'complete'
         && msg.kind !== 'status'
-        && msg.kind !== 'permission_request'
         && msg.kind !== 'permission_cancelled';
 
       if (sid && shouldPersist) {

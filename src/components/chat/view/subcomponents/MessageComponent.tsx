@@ -13,8 +13,12 @@ import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
 
+import { ShieldCheckIcon } from 'lucide-react';
+import { buildClaudeToolPermissionEntry, formatToolInputForDisplay } from '../../utils/chatPermissions';
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
+import MessageReactions from './MessageReactions';
+import type { ReactionType } from './MessageReactions';
 import MessageSpeakControl from './MessageSpeakControl';
 
 type DiffLine = {
@@ -35,6 +39,10 @@ type MessageComponentProps = {
   showThinking?: boolean;
   selectedProject?: Project | null;
   provider: Provider | string;
+  messageIndex?: number;
+  existingReaction?: { id: number; reaction: ReactionType } | null;
+  onReact?: (reaction: ReactionType) => Promise<void>;
+  onRemoveReaction?: (id: number) => Promise<void>;
 };
 
 type InteractiveOption = {
@@ -45,7 +53,7 @@ type InteractiveOption = {
 
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, autoExpandTools, showRawParameters, showThinking, selectedProject, provider, messageIndex, existingReaction, onReact, onRemoveReaction }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -132,6 +140,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
               </div>
             )}
             <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
+              {onReact && onRemoveReaction && messageIndex != null && messageIndex >= 0 && (
+                <MessageReactions
+                  existingReaction={existingReaction}
+                  onReact={onReact}
+                  onRemoveReaction={onRemoveReaction}
+                />
+              )}
               {shouldShowUserCopyControl && (
                 <MessageCopyControl content={userCopyContent} messageType="user" />
               )}
@@ -337,9 +352,29 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
                   </div>
                 </div>
               </div>
+            ) : message.isPermissionRequest ? (
+              /* Historical permission request — read-only record of what was approved */
+              (() => {
+                const permissionEntry = buildClaudeToolPermissionEntry(message.toolName, message.toolInput);
+                return (
+                  <div className="flex items-start gap-2 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                    <ShieldCheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <div className="min-w-0">
+                      <span>
+                        Permission: <code className="rounded bg-muted px-1 py-0.5">{message.toolName}</code>
+                      </span>
+                      {permissionEntry && (
+                        <div className="mt-0.5">
+                          Rule: <code className="rounded bg-muted px-1 py-0.5">{permissionEntry}</code>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
             ) : message.isThinking ? (
               /* Thinking messages — Reasoning component (ai-elements pattern) */
-              <Reasoning defaultOpen={false}>
+              <Reasoning defaultOpen={true}>
                 <ReasoningTrigger />
                 <ReasoningContent>
                   <Markdown className="prose prose-sm prose-gray max-w-none dark:prose-invert">
@@ -412,6 +447,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
             )}
 
             <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
+              {onReact && onRemoveReaction && messageIndex != null && messageIndex >= 0 && (
+                <MessageReactions
+                  existingReaction={existingReaction}
+                  onReact={onReact}
+                  onRemoveReaction={onRemoveReaction}
+                />
+              )}
               {shouldShowAssistantCopyControl && (
                 <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
               )}

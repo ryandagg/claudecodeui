@@ -196,6 +196,7 @@ export function useSlashCommands({
 
   useEffect(() => {
     let cancelled = false;
+    const skillsController = new AbortController();
 
     const fetchCommands = async () => {
       if (!selectedProject) {
@@ -282,7 +283,6 @@ export function useSlashCommands({
           skillsParams.set('workspacePath', workspacePath);
         }
 
-        const skillsController = new AbortController();
         const skillsTimeout = window.setTimeout(() => skillsController.abort(), 10_000);
 
         const skillsResponse = await authenticatedFetch(
@@ -304,7 +304,7 @@ export function useSlashCommands({
           setSlashCommands(sortByUsage([...builtIns, ...skillCommands, ...others]));
         }
       } catch (error) {
-        // Aborted or failed skills fetch is non-fatal — the base menu stands.
+        if (error instanceof DOMException && error.name === 'AbortError') return;
         console.error('Error fetching provider skills (menu still usable):', error);
       }
     };
@@ -312,6 +312,7 @@ export function useSlashCommands({
     fetchCommands();
     return () => {
       cancelled = true;
+      skillsController.abort();
     };
   }, [selectedProject, provider, commandListVersion]);
 

@@ -1,16 +1,15 @@
 import { authenticatedFetch } from '../utils/api';
-import { readVoiceConfig, voiceConfigHeaders } from '../hooks/useVoiceConfig';
+import { voiceConfigHeaders, type VoiceConfig } from '../hooks/useVoiceConfig';
 
 function directUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/$/, '')}${path}`;
 }
 
-export function voiceConfigSignature(): string {
-  return JSON.stringify(readVoiceConfig());
+export function voiceConfigSignature(config: VoiceConfig): string {
+  return JSON.stringify(config);
 }
 
-export function transcribeVoice(blob: Blob, filename: string): Promise<Response> {
-  const config = readVoiceConfig();
+export function transcribeVoice(config: VoiceConfig, blob: Blob, filename: string): Promise<Response> {
   const body = new FormData();
 
   if (config.baseUrl.trim()) {
@@ -26,14 +25,12 @@ export function transcribeVoice(blob: Blob, filename: string): Promise<Response>
   body.append('audio', blob, filename);
   return authenticatedFetch('/api/voice/transcribe', {
     method: 'POST',
-    headers: voiceConfigHeaders(),
+    headers: voiceConfigHeaders(config),
     body,
   });
 }
 
-export function synthesizeVoice(text: string, signal: AbortSignal): Promise<Response> {
-  const config = readVoiceConfig();
-
+export function synthesizeVoice(config: VoiceConfig, text: string, signal: AbortSignal): Promise<Response> {
   if (config.baseUrl.trim()) {
     return fetch(directUrl(config.baseUrl.trim(), '/audio/speech'), {
       method: 'POST',
@@ -54,7 +51,7 @@ export function synthesizeVoice(text: string, signal: AbortSignal): Promise<Resp
   return authenticatedFetch('/api/voice/tts', {
     method: 'POST',
     body: JSON.stringify({ text }),
-    headers: voiceConfigHeaders(),
+    headers: voiceConfigHeaders(config),
     signal,
   });
 }

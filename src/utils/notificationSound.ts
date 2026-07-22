@@ -1,26 +1,10 @@
-const NOTIFICATION_SOUND_ENABLED_STORAGE_KEY = 'notificationSoundEnabled';
+export const NOTIFICATION_SOUND_ENABLED_STORAGE_KEY = 'notificationSoundEnabled';
 const AudioContextConstructor =
   typeof window !== 'undefined'
     ? window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     : undefined;
 
 let audioContext: AudioContext | null = null;
-
-export const isNotificationSoundEnabled = (): boolean => {
-  if (typeof localStorage === 'undefined') {
-    return true;
-  }
-
-  return localStorage.getItem(NOTIFICATION_SOUND_ENABLED_STORAGE_KEY) !== 'false';
-};
-
-export const setNotificationSoundEnabled = (enabled: boolean): void => {
-  if (typeof localStorage === 'undefined') {
-    return;
-  }
-
-  localStorage.setItem(NOTIFICATION_SOUND_ENABLED_STORAGE_KEY, String(enabled));
-};
 
 const getAudioContext = (): AudioContext | null => {
   if (!AudioContextConstructor) {
@@ -58,8 +42,8 @@ const playTone = (
   oscillator.stop(startsAt + duration + 0.02);
 };
 
-export const playNotificationSound = async ({ force = false } = {}): Promise<void> => {
-  if (!force && !isNotificationSoundEnabled()) {
+export const playNotificationSound = async ({ force = false, enabled = true } = {}): Promise<void> => {
+  if (!force && !enabled) {
     return;
   }
 

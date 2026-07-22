@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useCallback } from 'react';
+
+import { useSettings } from '../contexts/SettingsContext';
 
 export type VoiceConfig = {
   baseUrl: string;
@@ -9,14 +11,12 @@ export type VoiceConfig = {
   ttsFormat: string;
 };
 
-const STORAGE_KEY = 'voiceConfig';
-export const VOICE_CONFIG_SYNC_EVENT = 'voice-config:sync';
+export const VOICE_CONFIG_STORAGE_KEY = 'voiceConfig';
 const DEFAULTS: VoiceConfig = { baseUrl: '', apiKey: '', sttModel: '', ttsModel: '', ttsVoice: '', ttsFormat: '' };
 
-export function readVoiceConfig(): VoiceConfig {
+export function parseVoiceConfig(raw: string | null): VoiceConfig {
+  if (!raw) return { ...DEFAULTS };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULTS };
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ...DEFAULTS };
     const config = { ...DEFAULTS };
@@ -31,38 +31,30 @@ export function readVoiceConfig(): VoiceConfig {
 
 // Headers the voice proxy reads to target a per-user OpenAI-compatible backend.
 // Empty fields are omitted so the server's env defaults apply.
-export function voiceConfigHeaders(): Record<string, string> {
-  if (typeof window === 'undefined') return {};
-  const c = readVoiceConfig();
+export function voiceConfigHeaders(config: VoiceConfig): Record<string, string> {
   const h: Record<string, string> = {};
-  if (c.apiKey) h['x-voice-api-key'] = c.apiKey;
-  if (c.sttModel) h['x-voice-stt-model'] = c.sttModel;
-  if (c.ttsModel) h['x-voice-tts-model'] = c.ttsModel;
-  if (c.ttsVoice) h['x-voice-tts-voice'] = c.ttsVoice;
-  if (c.ttsFormat.trim()) h['x-voice-tts-format'] = c.ttsFormat.trim();
+  if (config.apiKey) h['x-voice-api-key'] = config.apiKey;
+  if (config.sttModel) h['x-voice-stt-model'] = config.sttModel;
+  if (config.ttsModel) h['x-voice-tts-model'] = config.ttsModel;
+  if (config.ttsVoice) h['x-voice-tts-voice'] = config.ttsVoice;
+  if (config.ttsFormat.trim()) h['x-voice-tts-format'] = config.ttsFormat.trim();
   return h;
 }
 
 export function useVoiceConfig() {
-  const [config, setConfig] = useState<VoiceConfig>(() =>
-    typeof window === 'undefined' ? { ...DEFAULTS } : readVoiceConfig(),
-  );
+  const { getSetting, setSetting } = useSettings();
+  const config = parseVoiceConfig(getSetting(VOICE_CONFIG_STORAGE_KEY));
 
-  const update = (patch: Partial<VoiceConfig>) => {
-    setConfig((prev) => {
-      const next = { ...prev, ...patch };
-      try {
-        const stored: Partial<VoiceConfig> = { ...next };
-        if (next.ttsFormat.trim()) stored.ttsFormat = next.ttsFormat.trim();
-        else delete stored.ttsFormat;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-        window.dispatchEvent(new Event(VOICE_CONFIG_SYNC_EVENT));
-      } catch {
-        /* ignore persistence errors */
-      }
-      return next;
-    });
-  };
+  const update = useCallback(
+    (patch: Partial<VoiceConfig>) => {
+      const next = { ...parseVoiceConfig(getSetting(VOICE_CONFIG_STORAGE_KEY)), ...patch };
+      const stored: Partial<VoiceConfig> = { ...next };
+      if (next.ttsFormat.trim()) stored.ttsFormat = next.ttsFormat.trim();
+      else delete stored.ttsFormat;
+      setSetting(VOICE_CONFIG_STORAGE_KEY, JSON.stringify(stored));
+    },
+    [getSetting, setSetting],
+  );
 
   return { config, update };
 }

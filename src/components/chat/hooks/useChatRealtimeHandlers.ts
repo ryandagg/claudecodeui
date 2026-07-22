@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
 import type { ServerEvent } from '../../../contexts/WebSocketContext';
+import { useSettings } from '../../../contexts/SettingsContext';
 import { showCompletionTitleIndicator } from '../../../utils/pageTitleNotification';
-import { playChatCompletionSound, playNotificationSound } from '../../../utils/notificationSound';
+import { NOTIFICATION_SOUND_ENABLED_STORAGE_KEY, playChatCompletionSound, playNotificationSound } from '../../../utils/notificationSound';
 import type { MarkSessionIdle, MarkSessionProcessing } from '../../../hooks/useSessionProtection';
 import type { PendingPermissionRequest } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
@@ -88,6 +89,12 @@ export function useChatRealtimeHandlers({
     pendingPermissionRequestsRef.current = pendingPermissionRequests;
   }, [pendingPermissionRequests]);
 
+  // Mirror the sound preference into a ref so the websocket listener can read
+  // the current value synchronously without rebinding on every settings change.
+  const { getSetting } = useSettings();
+  const soundEnabledRef = useRef(true);
+  soundEnabledRef.current = getSetting(NOTIFICATION_SOUND_ENABLED_STORAGE_KEY) !== 'false';
+
   useEffect(() => {
     const handleEvent = (msg: ServerEvent) => {
       if (!msg.kind) {
@@ -135,7 +142,7 @@ export function useChatRealtimeHandlers({
             setPendingPermissionRequests(nextPendingPermissionRequests);
 
             if (hasPendingActionablePermissionRequests && !hadActionablePermissionRequests) {
-              void playNotificationSound();
+              void playNotificationSound({ enabled: soundEnabledRef.current });
             }
           }
           return;
@@ -250,7 +257,7 @@ export function useChatRealtimeHandlers({
           // Celebrate only successful runs (failed runs end with success: false).
           if (msg.success !== false) {
             showCompletionTitleIndicator();
-            void playChatCompletionSound();
+            void playChatCompletionSound({ enabled: soundEnabledRef.current });
           }
 
           // The session id is stable for the whole conversation (allocated
@@ -270,7 +277,7 @@ export function useChatRealtimeHandlers({
         case 'permission_request': {
           if (!msg.requestId) break;
           if (isActionablePermissionRequest({ toolName: msg.toolName })) {
-            void playNotificationSound();
+            void playNotificationSound({ enabled: soundEnabledRef.current });
           }
 
           if (sid === activeViewSessionId) {

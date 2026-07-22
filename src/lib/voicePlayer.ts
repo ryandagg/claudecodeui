@@ -1,3 +1,5 @@
+import type { VoiceConfig } from '../hooks/useVoiceConfig';
+
 import { synthesizeVoice, voiceConfigSignature } from './voiceApi';
 
 // A single app-level audio player for read-aloud. It owns one <audio> element, lives
@@ -15,8 +17,8 @@ const CACHE_MAX = 24;
 const CLIENT_TIMEOUT_MS = 330000; // backstop; the server proxy already times out at 5 min
 
 // Stable id / cache key from the text and voice settings that affect its audio (djb2).
-export function voiceId(content: string, signature = voiceConfigSignature()): string {
-  const input = JSON.stringify([content, signature]);
+export function voiceId(content: string, config: VoiceConfig): string {
+  const input = JSON.stringify([content, voiceConfigSignature(config)]);
   let h = 5381;
   for (let i = 0; i < input.length; i++) h = (((h << 5) + h) + input.charCodeAt(i)) | 0;
   return (h >>> 0).toString(36);
@@ -80,13 +82,13 @@ class VoicePlayer {
     this.unlocked = true;
   }
 
-  toggle(content: string) {
-    const id = voiceId(content);
+  toggle(content: string, config: VoiceConfig) {
+    const id = voiceId(content, config);
     if (this.currentId === id && (this.state === 'playing' || this.state === 'loading')) {
       this.stop();
       return;
     }
-    void this.play(id, content);
+    void this.play(id, content, config);
   }
 
   stop() {
@@ -129,7 +131,7 @@ class VoicePlayer {
     }, 6000);
   }
 
-  private async play(id: string, content: string) {
+  private async play(id: string, content: string, config: VoiceConfig) {
     const audio = this.ensureAudio();
     audio.pause();
     this.currentId = id;
@@ -147,7 +149,7 @@ class VoicePlayer {
         const controller = new AbortController();
         this.activeController = controller;
         const timer = setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
-        const res = await synthesizeVoice(content, controller.signal).finally(() => {
+        const res = await synthesizeVoice(config, content, controller.signal).finally(() => {
           clearTimeout(timer);
           if (this.activeController === controller) this.activeController = null;
         });

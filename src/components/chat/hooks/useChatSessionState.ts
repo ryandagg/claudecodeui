@@ -256,7 +256,7 @@ export function useChatSessionState({
       return;
     }
 
-    const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    const prov = (getSetting('selected-provider') as LLMProvider) || 'claude';
     const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
     if (normalized) {
       sessionStore.appendRealtime(activeSessionId, normalized);
@@ -264,7 +264,7 @@ export function useChatSessionState({
 
     flushedPendingUserMessageRef.current = pendingUserMessage;
     setPendingUserMessage(null);
-  }, [activeSessionId, pendingUserMessage, sessionStore]);
+  }, [activeSessionId, pendingUserMessage, sessionStore, getSetting]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const storeMessages = activeSessionId ? sessionStore.getMessages(activeSessionId) : [];
@@ -296,12 +296,12 @@ export function useChatSessionState({
       setPendingUserMessage(msg);
       return;
     }
-    const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    const prov = (getSetting('selected-provider') as LLMProvider) || 'claude';
     const normalized = chatMessageToNormalized(msg, activeSessionId, prov);
     if (normalized) {
       sessionStore.appendRealtime(activeSessionId, normalized);
     }
-  }, [activeSessionId, sessionStore]);
+  }, [activeSessionId, sessionStore, getSetting]);
 
   const clearMessages = useCallback(() => {
     if (!activeSessionId) return;

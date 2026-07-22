@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 
 import { useSettings } from '../../../../contexts/SettingsContext';
@@ -17,6 +17,18 @@ export default function SessionsSettingsTab() {
   const patterns = parseHiddenSessionPatterns(getSetting(HIDDEN_SESSION_STORAGE_KEY));
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [testText, setTestText] = useState('');
+
+  const testResults = useMemo(() => {
+    if (!testText.trim()) return null;
+    return patterns.map((p) => {
+      try {
+        return new RegExp(p, 'i').test(testText);
+      } catch {
+        return false;
+      }
+    });
+  }, [patterns, testText]);
 
   const persist = useCallback((next: string[]) => {
     setSetting(HIDDEN_SESSION_STORAGE_KEY, JSON.stringify(next));
@@ -105,9 +117,30 @@ export default function SessionsSettingsTab() {
       >
         <SettingsCard>
           <div className="space-y-3 p-4">
+            <div className="flex items-center gap-2 rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 px-3 py-1.5">
+              <span className="shrink-0 text-xs text-muted-foreground">Test:</span>
+              <input
+                type="text"
+                value={testText}
+                onChange={(e) => setTestText(e.target.value)}
+                placeholder="Paste a session name to test against patterns"
+                className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
+                spellCheck={false}
+              />
+              {testText.trim() && (
+                <span className={`shrink-0 text-xs font-medium ${testResults?.some(Boolean) ? 'text-green-500' : 'text-muted-foreground'}`}>
+                  {testResults?.some(Boolean) ? 'match' : 'no match'}
+                </span>
+              )}
+            </div>
+
             {patterns.map((pattern, index) => (
               <div key={index} className="flex items-center gap-2">
-                <code className="flex-1 rounded-md border border-input bg-muted/50 px-3 py-1.5 font-mono text-sm text-foreground">
+                <code className={`flex-1 rounded-md border px-3 py-1.5 font-mono text-sm text-foreground ${
+                  testResults && testText.trim()
+                    ? testResults[index] ? 'border-green-500/50 bg-green-500/10' : 'border-input bg-muted/50'
+                    : 'border-input bg-muted/50'
+                }`}>
                   <input
                     type="text"
                     value={pattern}

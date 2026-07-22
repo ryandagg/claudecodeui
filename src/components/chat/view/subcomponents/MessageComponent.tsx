@@ -106,7 +106,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, a
     };
   }, [autoExpandTools, isExpanded, message.isToolUse]);
 
-  const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
+  const formattedTime = useMemo(() => {
+    const d = new Date(message.timestamp);
+    return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString()}`;
+  }, [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
 
   if (shouldHideThinkingMessage) {

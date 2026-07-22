@@ -134,7 +134,7 @@ export function useSidebarController({
   sidebarVisible,
 }: UseSidebarControllerArgs) {
   const paletteOps = usePaletteOps();
-  const { getSetting } = useSettings();
+  const { getSetting, settings } = useSettings();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
@@ -151,9 +151,10 @@ export function useSidebarController({
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
   const hideWorktree = parseHideWorktreeSessions(getSetting(HIDE_WORKTREE_SESSIONS_KEY));
+  const hiddenPatternsRaw = settings[HIDDEN_SESSION_STORAGE_KEY] ?? null;
   const hiddenSessionRegexes = useMemo(
-    () => compilePatterns(parseHiddenSessionPatterns(getSetting(HIDDEN_SESSION_STORAGE_KEY))),
-    [getSetting],
+    () => compilePatterns(parseHiddenSessionPatterns(hiddenPatternsRaw)),
+    [hiddenPatternsRaw],
   );
   // Local fork: default to the flat, recency-sorted Conversations view on load
   // rather than the project-grouped Projects view.

@@ -263,9 +263,10 @@ function Sidebar({
               };
               if (project) {
                 const sessions = getProjectSessions(project);
-                const existing = sessions.find(s => s.id === sessionId);
+                const existing = sessions.find(s => s.id === sessionId)
+                  || (project.sessions || []).find(s => s.id === sessionId);
                 if (existing) {
-                  handleSessionClick({ ...existing, ...searchTarget }, project.projectId);
+                  handleSessionClick({ __provider: resolvedProvider, ...existing, ...searchTarget }, project.projectId);
                 } else {
                   handleSessionClick(sessionObj, project.projectId);
                 }

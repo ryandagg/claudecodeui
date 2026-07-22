@@ -27,6 +27,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<SettingsMap>({});
+  const settingsRef = useRef<SettingsMap>(settings);
+  settingsRef.current = settings;
 
   useEffect(() => {
     api.settings.get().then(async (res) => {
@@ -77,8 +79,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [scheduleFlush]);
 
   const getSetting = useCallback((key: string, fallback?: string) => {
-    return settings[key] ?? fallback ?? null;
-  }, [settings]);
+    return settingsRef.current[key] ?? fallback ?? null;
+  }, []);
 
   useEffect(() => {
     return () => {

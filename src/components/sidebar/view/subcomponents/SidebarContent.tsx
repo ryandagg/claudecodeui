@@ -247,10 +247,11 @@ export default function SidebarContent({
   projectListProps,
   t,
 }: SidebarContentProps) {
-  const { getSetting } = useSettings();
+  const { settings } = useSettings();
+  const hiddenPatternsRaw = settings[HIDDEN_SESSION_STORAGE_KEY] ?? null;
   const hiddenSessionRegexes = useMemo(
-    () => compilePatterns(parseHiddenSessionPatterns(getSetting(HIDDEN_SESSION_STORAGE_KEY))),
-    [getSetting],
+    () => compilePatterns(parseHiddenSessionPatterns(hiddenPatternsRaw)),
+    [hiddenPatternsRaw],
   );
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;

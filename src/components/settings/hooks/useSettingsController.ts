@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSettings } from '../../../contexts/SettingsContext';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { authenticatedFetch } from '../../../utils/api';
-import { setNotificationSoundEnabled } from '../../../utils/notificationSound';
+import { NOTIFICATION_SOUND_ENABLED_STORAGE_KEY } from '../../../utils/notificationSound';
 import { DEFAULT_CODE_EDITOR_SETTINGS } from '../constants/constants';
 import type {
   CodeEditorSettingsState,
@@ -150,18 +150,23 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     [],
   );
 
+  const prevOpenRef = useRef(false);
   useEffect(() => {
     if (!isOpen) {
+      prevOpenRef.current = false;
       return;
     }
 
-    setActiveTab(normalizeMainTab(initialTab));
+    if (!prevOpenRef.current) {
+      setActiveTab(normalizeMainTab(initialTab));
+      prevOpenRef.current = true;
+    }
     void loadSettings();
   }, [initialTab, isOpen, loadSettings]);
 
   useEffect(() => {
-    setNotificationSoundEnabled(notificationPreferences.channels.sound);
-  }, [notificationPreferences.channels.sound]);
+    setSetting(NOTIFICATION_SOUND_ENABLED_STORAGE_KEY, String(notificationPreferences.channels.sound));
+  }, [notificationPreferences.channels.sound, setSetting]);
 
   useEffect(() => {
     setSetting('codeEditorTheme', codeEditorSettings.theme);

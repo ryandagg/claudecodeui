@@ -2,9 +2,35 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { findAppRoot, getModuleDir } from '@/utils/runtime-paths.js';
 import { AppError } from '@/shared/utils.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Absolute root of the running CloudCLI app, resolved once at load. A worktree
+ * must NEVER be created inside this tree: when CloudCLI is used to develop its
+ * own repo, the dev server (Vite + tsx) watches this root recursively, so
+ * dropping a fresh checkout of `server/`+`src/` inside it makes Vite detect a
+ * changed tsconfig and force a full page reload — the "full page refresh,
+ * nothing loads" crash. The guard below refuses any such path.
+ */
+const APP_ROOT = findAppRoot(getModuleDir(import.meta.url));
+
+/**
+ * True when `candidate` is the same path as, or nested inside, `root`. Uses the
+ * repo's standard containment idiom (`resolve(root) + sep` + `startsWith`) so a
+ * sibling that merely shares a name prefix (`/repo-2` vs `/repo`) is not treated
+ * as a child.
+ */
+function isInside(candidate: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  if (resolvedCandidate === resolvedRoot) {
+    return true;
+  }
+  return resolvedCandidate.startsWith(resolvedRoot + path.sep);
+}
 
 /**
  * Options for creating a git worktree at session-start time. Mirrors what the
@@ -14,9 +40,9 @@ const execFileAsync = promisify(execFile);
  */
 export type SessionWorktreeOptions = {
   /**
-   * Branch/dir name for the worktree. Blank → an auto-generated name. The git
-   * `worktree add <path>` command infers the new branch name from the path's
-   * final segment, so this doubles as both directory and branch name.
+   * Branch/dir name for the worktree. Blank → an auto-generated name. Sanitized
+   * to a single traversal-free path segment and used as BOTH the new branch name
+   * and the worktree's directory name (a sibling of the source repo).
    */
   name?: string;
   /**
@@ -44,9 +70,9 @@ export type CreateSessionWorktreeResult = {
 function normalizeWorktreeName(rawName: string | undefined): string {
   const trimmed = (rawName ?? '').trim();
   const slug = trimmed
-    .replace(/[^\w.\-/]+/g, '-') // keep word chars, dot, dash, slash; collapse the rest
-    .replace(/\.{2,}/g, '.') // collapse `..` so a name can't traverse out of the repo root
-    .replace(/^[-/.]+|[-/.]+$/g, '') // no leading/trailing separators or dots
+    .replace(/[^\w.\-]+/g, '-') // single path segment: word chars, dot, dash only — NO slash
+    .replace(/\.{2,}/g, '.') // collapse `..` so the name can't encode a traversal
+    .replace(/^[-.]+|[-.]+$/g, '') // no leading/trailing separators or dots
     .replace(/-{2,}/g, '-');
 
   if (slug.length > 0) {
@@ -166,9 +192,24 @@ export async function createSessionWorktree(
   const baseRefInput = (options.baseRef ?? '').trim();
   const baseRef = baseRefInput || (await resolveDefaultBaseRef(repoTopLevel, deps));
 
-  // Path mirrors `git worktree add <name>` run from the repo root: a sibling
-  // directory of the repo's working files, named after the branch.
-  const worktreePath = path.resolve(repoTopLevel, branch);
+  // Place the worktree BESIDE the repo, never inside it — the `git worktree add
+  // ../<name>` idiom. A worktree inside the repo lands in the dev server's
+  // Vite/tsx watch scope and force-reloads the app (the crash this fixes).
+  // `branch` is already a single traversal-free path segment, so this always
+  // resolves to an immediate sibling of the repo directory.
+  const worktreePath = path.resolve(repoTopLevel, '..', branch);
+
+  // Invariant (defense in depth): the worktree must not land inside the source
+  // repo OR the running CloudCLI app root, no matter what the input string was.
+  // This is the guarantee — the sibling path above is just the mechanism.
+  for (const forbidden of [repoTopLevel, APP_ROOT]) {
+    if (isInside(worktreePath, forbidden)) {
+      throw new AppError(
+        `Refusing to create a worktree at ${worktreePath}: it is inside ${forbidden}. Worktrees must live outside the repository and the app directory.`,
+        { code: 'WORKTREE_INSIDE_REPO', statusCode: 400, details: { worktreePath, forbidden } },
+      );
+    }
+  }
 
   // `git -C <repo> worktree add -b <branch> <path> <baseRef>` — create a new
   // branch off baseRef and check it out into the new worktree. `add` refuses to

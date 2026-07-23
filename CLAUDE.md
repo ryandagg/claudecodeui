@@ -46,10 +46,10 @@ git branch -D <branch>  # only if the user confirms deletion
    ```
 
 ### Multiple sessions working concurrently
-- don't kill servers, find ports that are not taken
 - Each session uses a **unique branch + worktree** (e.g. `/tmp/ccui-reactions`, `/tmp/ccui-sidebar-fix`).
 - Merges to main happen one at a time. If main moved, rebase before merging.
 - The dev server picks up changes naturally on merge (tsx watches `server/`, Vite HMRs frontend).
+- dev server ports are now handled via script. Check logs after any server restart for URL.
 
 ### Verification — no change is done until tested in a browser
 

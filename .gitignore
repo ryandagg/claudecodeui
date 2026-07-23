@@ -107,14 +107,13 @@ temp/
 .cline/
 .windsurf/
 .serena/
-CLAUDE.md
 .mcp.json
 .gemini/
 
 # Database files
 *.db
 *.sqlite
-*.sqlite3 
+*.sqlite3
 
 logs
 dev-debug.log
@@ -130,7 +129,7 @@ dev-debug.log
 
 # Task files
 tasks.json
-tasks/ 
+tasks/
 
 # Translations
 !src/i18n/locales/en/tasks.json

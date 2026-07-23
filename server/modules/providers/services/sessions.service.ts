@@ -5,6 +5,11 @@ import path from 'node:path';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
+import {
+  createSessionWorktree,
+  type CreateSessionWorktreeResult,
+  type SessionWorktreeOptions,
+} from '@/modules/providers/services/session-worktree.service.js';
 import type {
   FetchHistoryOptions,
   FetchHistoryResult,
@@ -17,6 +22,8 @@ type CreateAppSessionResult = {
   sessionId: string;
   provider: LLMProvider;
   projectPath: string;
+  /** Present only when the session was started in a freshly-created worktree. */
+  worktree?: CreateSessionWorktreeResult;
 };
 
 type ArchivedSessionListItem = {
@@ -119,8 +126,19 @@ export const sessionsService = {
    * chat, navigates to the returned id immediately, and the id never changes
    * for the lifetime of the conversation. The provider-native id is mapped to
    * this row later, when the provider runtime announces it mid-run.
+   *
+   * When `worktree` is supplied, a fresh git worktree is created under the
+   * project repo first and the session is anchored to it — the startup-time
+   * equivalent of `claude --worktree`. Because the session row's project_path
+   * becomes the worktree path, the existing cwd plumbing launches the session
+   * inside the worktree with no further changes (context and shell agree from
+   * the first turn, avoiding the `cd`-after-launch churn).
    */
-  createAppSession(provider: LLMProvider, projectPath: string): CreateAppSessionResult {
+  async createAppSession(
+    provider: LLMProvider,
+    projectPath: string,
+    worktree?: SessionWorktreeOptions,
+  ): Promise<CreateAppSessionResult> {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
       throw new AppError('projectPath is required.', {
@@ -129,13 +147,23 @@ export const sessionsService = {
       });
     }
 
+    // Create the worktree BEFORE allocating the session row so a git failure
+    // (non-repo source, name collision) aborts cleanly with no orphaned session.
+    let sessionProjectPath = normalizedProjectPath;
+    let worktreeInfo: CreateSessionWorktreeResult | undefined;
+    if (worktree) {
+      worktreeInfo = await createSessionWorktree(normalizedProjectPath, worktree);
+      sessionProjectPath = worktreeInfo.worktreePath;
+    }
+
     const sessionId = randomUUID();
-    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath);
+    sessionsDb.createAppSession(sessionId, provider, sessionProjectPath);
 
     return {
       sessionId,
       provider,
-      projectPath: normalizedProjectPath,
+      projectPath: sessionProjectPath,
+      worktree: worktreeInfo,
     };
   },
 

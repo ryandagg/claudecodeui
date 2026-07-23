@@ -207,6 +207,7 @@ function ChatInterface({
     editQueuedDraft,
     deleteQueuedDraft,
     sendQueuedDraftNow,
+    worktreeControl,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -470,6 +471,7 @@ function ChatInterface({
           onEditQueuedDraft={editQueuedDraft}
           onDeleteQueuedDraft={deleteQueuedDraft}
           onSendQueuedDraftNow={sendQueuedDraftNow}
+          worktreeControl={worktreeControl}
         />
       </div>
 

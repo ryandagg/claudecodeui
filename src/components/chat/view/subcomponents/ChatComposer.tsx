@@ -21,12 +21,13 @@ import {
   CheckIcon,
   ChevronDown,
   Check,
+  GitBranchIcon,
 } from 'lucide-react';
 
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import { useVoiceAvailable } from '../../hooks/useVoiceAvailable';
 import type { SessionActivity } from '../../../../hooks/useSessionProtection';
-import type { PendingPermissionRequest, PermissionMode } from '../../types/types';
+import type { PendingPermissionRequest, PermissionMode, WorktreeControl } from '../../types/types';
 import type { QueuedDraft } from '../../hooks/useChatComposerState';
 import type { ProviderModelOption } from '../../../../types/app';
 import { DEFAULT_EFFORT_VALUE } from '../../constants/providerEffort';
@@ -123,6 +124,7 @@ interface ChatComposerProps {
   onEditQueuedDraft: () => void;
   onDeleteQueuedDraft: () => void;
   onSendQueuedDraftNow: () => void;
+  worktreeControl: WorktreeControl;
 }
 
 export default function ChatComposer({
@@ -181,6 +183,7 @@ export default function ChatComposer({
   onEditQueuedDraft,
   onDeleteQueuedDraft,
   onSendQueuedDraftNow,
+  worktreeControl,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const [pathCopied, setPathCopied] = useState(false);
@@ -189,6 +192,63 @@ export default function ChatComposer({
   const [effortMenuPosition, setEffortMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const effortButtonRef = useRef<HTMLButtonElement | null>(null);
   const effortMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const [isWorktreeMenuOpen, setIsWorktreeMenuOpen] = useState(false);
+  const [worktreeMenuPosition, setWorktreeMenuPosition] = useState<{ bottom: number; left: number } | null>(null);
+  const worktreeMenuRef = useRef<HTMLDivElement | null>(null);
+  const worktreeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // The popover renders through a portal with position: fixed (like the effort
+  // menu) so it escapes the composer footer's stacking/overflow context — an
+  // in-flow absolute panel is painted UNDER the messages pane and its controls
+  // become unclickable. Anchor above the button; `bottom` pins it there.
+  const computeWorktreeMenuPosition = useCallback(() => {
+    const button = worktreeButtonRef.current;
+    if (!button) return null;
+    const rect = button.getBoundingClientRect();
+    return {
+      bottom: window.innerHeight - rect.top + 8,
+      left: rect.left,
+    };
+  }, []);
+
+  const openWorktreeMenu = useCallback(() => {
+    const pos = computeWorktreeMenuPosition();
+    if (pos) setWorktreeMenuPosition(pos);
+    setIsWorktreeMenuOpen(true);
+  }, [computeWorktreeMenuPosition]);
+
+  // Close the worktree popover on outside click / Escape; reposition on scroll/resize.
+  useEffect(() => {
+    if (!isWorktreeMenuOpen) return undefined;
+    const handlePointerDown = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        worktreeMenuRef.current?.contains(target) ||
+        worktreeButtonRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setIsWorktreeMenuOpen(false);
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setIsWorktreeMenuOpen(false);
+    };
+    const reposition = () => {
+      const pos = computeWorktreeMenuPosition();
+      if (pos) setWorktreeMenuPosition(pos);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [isWorktreeMenuOpen, computeWorktreeMenuPosition]);
 
   const computeEffortMenuPosition = useCallback(() => {
     const button = effortButtonRef.current;
@@ -487,6 +547,106 @@ export default function ChatComposer({
                 </span>
               </div>
             </button>
+
+            {worktreeControl.isNewSession && (
+              <div className="relative">
+                <button
+                  ref={worktreeButtonRef}
+                  type="button"
+                  onClick={() => {
+                    if (isWorktreeMenuOpen) {
+                      setIsWorktreeMenuOpen(false);
+                    } else {
+                      openWorktreeMenu();
+                    }
+                  }}
+                  aria-pressed={worktreeControl.enabled}
+                  className={`flex items-center gap-1.5 rounded-lg border p-2 text-xs font-medium transition-all duration-200 sm:px-2.5 sm:py-1 ${
+                    worktreeControl.enabled
+                      ? 'border-purple-300/60 bg-purple-50 text-purple-700 hover:bg-purple-100 dark:border-purple-600/40 dark:bg-purple-900/15 dark:text-purple-300 dark:hover:bg-purple-900/25'
+                      : 'border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted'
+                  }`}
+                  title={t('input.worktree.tooltip', {
+                    defaultValue: 'Start this session in a new git worktree',
+                  })}
+                >
+                  <GitBranchIcon className="h-3.5 w-3.5" />
+                  <span className="hidden whitespace-nowrap sm:inline">
+                    {worktreeControl.enabled
+                      ? t('input.worktree.on', { defaultValue: 'New worktree' })
+                      : t('input.worktree.label', { defaultValue: 'Worktree' })}
+                  </span>
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+
+                {isWorktreeMenuOpen && worktreeMenuPosition && createPortal(
+                  <div
+                    ref={worktreeMenuRef}
+                    role="dialog"
+                    aria-label={t('input.worktree.title', { defaultValue: 'New git worktree' })}
+                    style={{
+                      position: 'fixed',
+                      bottom: worktreeMenuPosition.bottom,
+                      left: worktreeMenuPosition.left,
+                      zIndex: 60,
+                    }}
+                    className="w-72 rounded-xl border border-border/50 bg-card/95 p-3 shadow-lg backdrop-blur-md"
+                  >
+                    <label className="flex cursor-pointer items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-foreground">
+                        {t('input.worktree.enable', { defaultValue: 'Start in a new worktree' })}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={worktreeControl.enabled}
+                        onChange={(event) => worktreeControl.setEnabled(event.target.checked)}
+                        className="h-4 w-4 accent-purple-600"
+                      />
+                    </label>
+                    <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                      {t('input.worktree.help', {
+                        defaultValue:
+                          'Creates a fresh git worktree and launches this session inside it — no cd needed. The project must be a git repo.',
+                      })}
+                    </p>
+
+                    <div className={worktreeControl.enabled ? 'mt-3 space-y-2' : 'mt-3 space-y-2 opacity-50'}>
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-medium text-muted-foreground">
+                          {t('input.worktree.nameLabel', { defaultValue: 'Branch / folder name' })}
+                        </label>
+                        <input
+                          type="text"
+                          value={worktreeControl.name}
+                          disabled={!worktreeControl.enabled}
+                          onChange={(event) => worktreeControl.setName(event.target.value)}
+                          placeholder={t('input.worktree.namePlaceholder', {
+                            defaultValue: 'optional — auto-named if blank',
+                          })}
+                          className="w-full rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary/50 disabled:cursor-not-allowed"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-medium text-muted-foreground">
+                          {t('input.worktree.baseRefLabel', { defaultValue: 'Base ref' })}
+                        </label>
+                        <input
+                          type="text"
+                          value={worktreeControl.baseRef}
+                          disabled={!worktreeControl.enabled}
+                          onChange={(event) => worktreeControl.setBaseRef(event.target.value)}
+                          placeholder={t('input.worktree.baseRefPlaceholder', {
+                            defaultValue: 'optional — defaults to origin default branch',
+                          })}
+                          className="w-full rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary/50 disabled:cursor-not-allowed"
+                        />
+                      </div>
+                    </div>
+                  </div>,
+                  document.body,
+                )}
+              </div>
+            )}
 
             {availableEffortOptions.length > 0 && (
               <>

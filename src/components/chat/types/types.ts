@@ -9,6 +9,27 @@ export type Provider = LLMProvider;
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions' | 'plan';
 
+/**
+ * State + setters for the "Start in a new git worktree" composer control.
+ * Surfaced by useChatComposerState and rendered only when `isNewSession` is
+ * true (the option is meaningless once a session already has a cwd). When
+ * enabled, the create-session request tells the server to `git worktree add`
+ * and anchor the new session inside it.
+ */
+export interface WorktreeControl {
+  /** True only before the first turn of a brand-new conversation. */
+  isNewSession: boolean;
+  /** Whether the user opted to start this session in a fresh worktree. */
+  enabled: boolean;
+  /** Optional branch/dir name; blank → server auto-generates one. */
+  name: string;
+  /** Optional base ref; blank → server uses the repo's default branch. */
+  baseRef: string;
+  setEnabled: (enabled: boolean) => void;
+  setName: (name: string) => void;
+  setBaseRef: (baseRef: string) => void;
+}
+
 export interface ChatImage {
   data: string;
   name: string;

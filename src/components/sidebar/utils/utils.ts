@@ -89,17 +89,8 @@ export const createSessionViewModel = (
 };
 
 export const HIDDEN_SESSION_STORAGE_KEY = 'hidden-session-patterns';
-export const HIDE_WORKTREE_SESSIONS_KEY = 'hide-worktree-sessions';
 
 export const DEFAULT_HIDDEN_SESSION_PATTERNS = ['^ping$'];
-
-export const parseHideWorktreeSessions = (raw: string | null): boolean => raw !== 'false';
-
-const WORKTREE_PATH_PATTERN = /[\\/]worktrees[\\/]/;
-
-export const isWorktreeProject = (project: Project): boolean => {
-  return WORKTREE_PATH_PATTERN.test(project.fullPath || '');
-};
 
 export const parseHiddenSessionPatterns = (raw: string | null): string[] => {
   try {

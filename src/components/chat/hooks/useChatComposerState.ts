@@ -228,6 +228,16 @@ export function useChatComposerState({
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [commandModalPayload, setCommandModalPayload] = useState<CommandModalPayload | null>(null);
 
+  // "Start in a new git worktree" — only meaningful for a brand-new session.
+  // When enabled, the create-session request asks the server to `git worktree
+  // add` and anchor the session to it, so the session launches with its cwd
+  // already inside the worktree (the startup-time equivalent of
+  // `claude --worktree`). Name/baseRef are optional; blank → server defaults
+  // (auto name, origin default branch).
+  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
+  const [worktreeName, setWorktreeName] = useState('');
+  const [worktreeBaseRef, setWorktreeBaseRef] = useState('');
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
   const textareaLineHeightRef = useRef<number | null>(null);
@@ -774,10 +784,36 @@ export function useChatComposerState({
             body: JSON.stringify({
               provider,
               projectPath: resolvedProjectPath,
+              // Only sent for brand-new sessions the user opted to isolate in a
+              // fresh worktree. Blank name/baseRef → server picks defaults.
+              ...(worktreeEnabled
+                ? {
+                    worktree: {
+                      name: worktreeName.trim(),
+                      baseRef: worktreeBaseRef.trim(),
+                    },
+                  }
+                : {}),
             }),
           });
           if (!response.ok) {
-            throw new Error(`Failed to create session (${response.status})`);
+            // Surface the server's specific worktree error (e.g. not-a-git-repo,
+            // name collision) instead of a bare status code.
+            let detail = `Failed to create session (${response.status})`;
+            try {
+              const errBody = await response.json();
+              const serverMessage =
+                (typeof errBody?.error === 'string' && errBody.error) ||
+                (typeof errBody?.error?.message === 'string' && errBody.error.message) ||
+                (typeof errBody?.message === 'string' && errBody.message) ||
+                '';
+              if (serverMessage) {
+                detail = serverMessage;
+              }
+            } catch {
+              // Non-JSON error body: keep the status-code message.
+            }
+            throw new Error(detail);
           }
           const body = await response.json();
           targetSessionId = body?.data?.sessionId || null;
@@ -875,6 +911,9 @@ export function useChatComposerState({
       addMessage,
       setIsUserScrolledUp,
       slashCommands,
+      worktreeEnabled,
+      worktreeName,
+      worktreeBaseRef,
     ],
   );
 
@@ -1266,5 +1305,15 @@ export function useChatComposerState({
     editQueuedDraft,
     deleteQueuedDraft,
     sendQueuedDraftNow,
+    // "Start in new worktree" control — only actionable on a brand-new session.
+    worktreeControl: {
+      isNewSession: !sessionKey,
+      enabled: worktreeEnabled,
+      name: worktreeName,
+      baseRef: worktreeBaseRef,
+      setEnabled: setWorktreeEnabled,
+      setName: setWorktreeName,
+      setBaseRef: setWorktreeBaseRef,
+    },
   };
 }

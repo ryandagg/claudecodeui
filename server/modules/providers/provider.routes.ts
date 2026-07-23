@@ -7,6 +7,7 @@ import { providerModelsService } from '@/modules/providers/services/provider-mod
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import type { SessionWorktreeOptions } from '@/modules/providers/services/session-worktree.service.js';
 import type {
   LLMProvider,
   McpScope,
@@ -293,6 +294,31 @@ const parseProvider = (value: unknown): LLMProvider => {
   });
 };
 
+/**
+ * Parses the optional `worktree` field of the create-session body. Returns
+ * `undefined` when the client did not request a worktree (the common case), or
+ * a normalized options object when it did. `name`/`baseRef` may be blank — the
+ * worktree service fills sensible defaults (auto-name, origin default branch).
+ * A truthy-but-non-object `worktree` (e.g. `true`) is treated as "create with
+ * all defaults".
+ */
+const parseWorktreeOptions = (value: unknown): SessionWorktreeOptions | undefined => {
+  if (value === undefined || value === null || value === false) {
+    return undefined;
+  }
+
+  if (typeof value !== 'object') {
+    // e.g. `worktree: true` → create with defaults.
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    name: typeof record.name === 'string' ? record.name : undefined,
+    baseRef: typeof record.baseRef === 'string' ? record.baseRef : undefined,
+  };
+};
+
 const parseSessionRenameSummary = (payload: unknown): string => {
   if (!payload || typeof payload !== 'object') {
     throw new AppError('Request body must be an object.', {
@@ -532,7 +558,8 @@ router.post(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
-    const result = sessionsService.createAppSession(provider, projectPath);
+    const worktree = parseWorktreeOptions(body.worktree);
+    const result = await sessionsService.createAppSession(provider, projectPath, worktree);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );

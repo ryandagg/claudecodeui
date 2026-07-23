@@ -22,10 +22,7 @@ import {
   getAllSessions,
   getSessionDate,
   HIDDEN_SESSION_STORAGE_KEY,
-  HIDE_WORKTREE_SESSIONS_KEY,
-  isWorktreeProject,
   parseHiddenSessionPatterns,
-  parseHideWorktreeSessions,
   parseProjectSortOrder,
   PROJECT_SORT_ORDER_KEY,
   readLegacyStarredProjectIds,
@@ -150,7 +147,6 @@ export function useSidebarController({
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
-  const hideWorktree = parseHideWorktreeSessions(getSetting(HIDE_WORKTREE_SESSIONS_KEY));
   const hiddenPatternsRaw = settings[HIDDEN_SESSION_STORAGE_KEY] ?? null;
   const hiddenSessionRegexes = useMemo(
     () => compilePatterns(parseHiddenSessionPatterns(hiddenPatternsRaw)),
@@ -660,11 +656,8 @@ export function useSidebarController({
   }, [optimisticStarByProjectId, projects]);
 
   const sortedProjects = useMemo(() => {
-    const base = hideWorktree
-      ? projectsWithResolvedStarState.filter((p) => !isWorktreeProject(p))
-      : projectsWithResolvedStarState;
-    return sortProjects(base, projectSortOrder);
-  }, [hideWorktree, projectSortOrder, projectsWithResolvedStarState]);
+    return sortProjects(projectsWithResolvedStarState, projectSortOrder);
+  }, [projectSortOrder, projectsWithResolvedStarState]);
 
   const runningProjects = useMemo(() => {
     // "Running" should surface live work regardless of who started it. The

@@ -117,7 +117,8 @@
     "plugins": "Plugins",
     "shortcuts": "Shortcuts",
     "about": "About",
-    "sessions": "Sessions"
+    "sessions": "Sessions",
+    "environment": "Environment"
   },
   "shortcuts": {
     "title": "Keyboard Shortcuts",

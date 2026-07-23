@@ -1,4 +1,4 @@
-export type SettingsMainTab = 'appearance' | 'sessions' | 'notifications' | 'shortcuts' | 'about';
+export type SettingsMainTab = 'appearance' | 'sessions' | 'environment' | 'notifications' | 'shortcuts' | 'about';
 export type ProjectSortOrder = 'name' | 'date';
 export type SaveStatus = 'success' | 'error' | null;
 

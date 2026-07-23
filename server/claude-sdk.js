@@ -235,6 +235,15 @@ function mapCliOptionsToSDK(options = {}) {
   // This loads CLAUDE.md from project, user (~/.config/claude/CLAUDE.md), and local directories
   sdkOptions.settingSources = ['project', 'user', 'local'];
 
+  // Inject generic Claude env overrides from the Environment settings tab into
+  // the SDK `settings.env` layer. This is the ONLY layer Claude Code reads keys
+  // like CLAUDE_CODE_AUTO_COMPACT_WINDOW from — process env (sdkOptions.env
+  // above) does NOT work for these. `settings` is the highest-priority
+  // user-controlled settings layer (equivalent to the `--settings` CLI flag).
+  if (options.sessionEnv && Object.keys(options.sessionEnv).length > 0) {
+    sdkOptions.settings = { ...(sdkOptions.settings || {}), env: options.sessionEnv };
+  }
+
   // Map resume session
   if (sessionId) {
     sdkOptions.resume = sessionId;

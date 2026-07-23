@@ -7,6 +7,7 @@ import { useEscapeClose } from '../../../hooks/useEscapeClose';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
 import SessionsSettingsTab from '../view/tabs/SessionsSettingsTab';
+import EnvironmentSettingsTab from '../view/tabs/EnvironmentSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import KeyboardShortcutsSettingsTab from '../view/tabs/KeyboardShortcutsSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
@@ -155,6 +156,8 @@ function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps)
               )}
 
               {activeTab === 'sessions' && <SessionsSettingsTab />}
+
+              {activeTab === 'environment' && <EnvironmentSettingsTab />}
 
               {activeTab === 'notifications' && (
                 <NotificationsSettingsTab

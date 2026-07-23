@@ -18,6 +18,7 @@ type MainTabConfig = {
 const TAB_CONFIG: MainTabConfig[] = [
   { id: 'appearance', labelKey: 'mainTabs.appearance' },
   { id: 'sessions', labelKey: 'mainTabs.sessions' },
+  { id: 'environment', labelKey: 'mainTabs.environment' },
   { id: 'notifications', labelKey: 'mainTabs.notifications' },
   { id: 'shortcuts', labelKey: 'mainTabs.shortcuts' },
   { id: 'about', labelKey: 'mainTabs.about', icon: Info },

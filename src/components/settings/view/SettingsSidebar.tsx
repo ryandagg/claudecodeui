@@ -1,4 +1,4 @@
-import { Bell, EyeOff, Info, Keyboard, Palette } from 'lucide-react';
+import { Bell, EyeOff, Info, Keyboard, Palette, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
@@ -19,6 +19,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { id: 'appearance', labelKey: 'mainTabs.appearance', icon: Palette },
   { id: 'sessions', labelKey: 'mainTabs.sessions', icon: EyeOff },
+  { id: 'environment', labelKey: 'mainTabs.environment', icon: Terminal },
   { id: 'notifications', labelKey: 'mainTabs.notifications', icon: Bell },
   { id: 'shortcuts', labelKey: 'mainTabs.shortcuts', icon: Keyboard },
   { id: 'about', labelKey: 'mainTabs.about', icon: Info },

@@ -5,6 +5,7 @@ import {
   Info,
   Keyboard,
   Palette,
+  Terminal,
 } from 'lucide-react';
 
 import type {
@@ -23,6 +24,7 @@ export type SettingsMainTabMeta = {
 export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
   { id: 'appearance', label: 'Appearance', keywords: 'appearance theme dark light language', icon: Palette },
   { id: 'sessions', label: 'Sessions', keywords: 'sessions hide filter regex', icon: EyeOff },
+  { id: 'environment', label: 'Environment', keywords: 'environment env variables settings compact context window', icon: Terminal },
   { id: 'notifications', label: 'Notifications', keywords: 'notifications alerts push', icon: Bell },
   { id: 'shortcuts', label: 'Shortcuts', keywords: 'shortcuts keyboard hotkeys', icon: Keyboard },
   { id: 'about', label: 'About', keywords: 'about version info', icon: Info },

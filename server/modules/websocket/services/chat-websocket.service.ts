@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 
-import { sessionsDb } from '@/modules/database/index.js';
+import { sessionsDb, userSettingsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import type {
@@ -100,6 +100,48 @@ function readRequiredSessionId(data: AnyRecord): string | null {
 }
 
 /**
+ * Reads the user's generic Claude env overrides (the `claude-session-env` UI
+ * setting) and returns them as a string→string map for injection into the
+ * SDK's `settings.env` layer. The stored value is a JSON object string edited
+ * in the Environment settings tab; malformed JSON or a non-object is treated as
+ * "no overrides" rather than failing the run. Non-string values are coerced so
+ * a numeric-looking entry (e.g. a compact window) still reaches the SDK.
+ */
+function readSessionEnv(userId: string | number | null): Record<string, string> {
+  if (userId === null) {
+    return {};
+  }
+
+  const numericUserId = typeof userId === 'number' ? userId : Number(userId);
+  if (!Number.isFinite(numericUserId)) {
+    return {};
+  }
+
+  try {
+    const raw = userSettingsDb.get(numericUserId)['claude-session-env'];
+    if (typeof raw !== 'string' || raw.trim().length === 0) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof key === 'string' && key.length > 0) {
+        env[key] = typeof value === 'string' ? value : String(value);
+      }
+    }
+    return env;
+  } catch {
+    // Bad JSON in the setting: skip overrides rather than break the run.
+    return {};
+  }
+}
+
+/**
  * Handles `chat.send`: resolves the session row (provider, project path, and
  * provider-native id all come from the database — never from the client),
  * registers the run, and dispatches to the provider runtime.
@@ -165,6 +207,11 @@ async function handleChatSend(
     resume: Boolean(session.provider_session_id),
     cwd: clientOptions.cwd ?? session.project_path ?? undefined,
     projectPath: session.project_path ?? clientOptions.projectPath,
+    // Generic Claude env overrides from the Environment settings tab. The Claude
+    // runtime injects these into the SDK's settings.env layer (the only layer
+    // Claude Code reads keys like CLAUDE_CODE_AUTO_COMPACT_WINDOW from). Read
+    // server-side from the DB, never trusted from the client.
+    sessionEnv: readSessionEnv(userId),
   };
 
   try {

@@ -28,6 +28,12 @@ export default defineConfig(({ mode }) => {
     server: {
       host,
       port: parseInt(env.VITE_PORT) || 5173,
+      // Fail loudly instead of silently drifting 5173→5174 when the port is
+      // taken. The dev launcher (scripts/dev.js) already guarantees a free port,
+      // so a bound VITE_PORT here means a real conflict worth surfacing — a
+      // drifted Vite would still proxy to the ORIGINAL SERVER_PORT and cross-wire
+      // one worktree's frontend to another's backend.
+      strictPort: true,
       proxy: {
         '/api': `http://${proxyHost}:${serverPort}`,
         '/ws': {

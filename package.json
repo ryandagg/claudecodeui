@@ -25,9 +25,9 @@
     "url": "https://github.com/nicandgus/claude-gui/issues"
   },
   "scripts": {
-    "predev": "node scripts/dev-preflight.js",
-    "dev": "npm install && concurrently \"npm run server:dev-watch\" \"npm run client\"",
-    "dev:no-watch": "concurrently \"npm run server:dev\" \"npm run client\"",
+    "predev": "npm install",
+    "dev": "node scripts/dev.js",
+    "dev:no-watch": "node scripts/dev.js --no-watch",
     "server": "node dist-server/server/index.js",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",

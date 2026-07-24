@@ -80,3 +80,4 @@ git branch -D <branch>  # only if the user confirms deletion
 - Repository pattern: one file per entity in `server/modules/database/repositories/`
 - Client API calls via `src/utils/api.js` using `authenticatedFetch`
 - TypeScript strict, no build errors tolerated before merge
+- **Claude feature config (model, permissions, hooks, `env`) is owned by `~/.claude/settings.json`** — read/write it there, not a secondary in-app store. The Agent SDK enforces these via `settingSources`, so a parallel copy is silently ignored. App-only UX (theme, notifications, editor prefs) stays in the app's DB.

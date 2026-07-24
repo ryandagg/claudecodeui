@@ -42,7 +42,7 @@ export type SessionWorktreeOptions = {
   /**
    * Branch/dir name for the worktree. Blank → an auto-generated name. Sanitized
    * to a single traversal-free path segment and used as BOTH the new branch name
-   * and the worktree's directory name (a sibling of the source repo).
+   * and the worktree's directory name (under `<repo>/../worktrees/`).
    */
   name?: string;
   /**
@@ -192,12 +192,14 @@ export async function createSessionWorktree(
   const baseRefInput = (options.baseRef ?? '').trim();
   const baseRef = baseRefInput || (await resolveDefaultBaseRef(repoTopLevel, deps));
 
-  // Place the worktree BESIDE the repo, never inside it — the `git worktree add
-  // ../<name>` idiom. A worktree inside the repo lands in the dev server's
-  // Vite/tsx watch scope and force-reloads the app (the crash this fixes).
-  // `branch` is already a single traversal-free path segment, so this always
-  // resolves to an immediate sibling of the repo directory.
-  const worktreePath = path.resolve(repoTopLevel, '..', branch);
+  // Place the worktree under a `worktrees/` dir BESIDE the repo, never inside it
+  // — `<repo>/../worktrees/<name>`. A worktree inside the repo lands in the dev
+  // server's Vite/tsx watch scope and force-reloads the app (the crash this
+  // avoids). The path is repo-RELATIVE (not the developer's home layout), so it
+  // is portable for anyone who clones this public repo elsewhere. git creates
+  // the intermediate `worktrees/` dir on demand. `branch` is a single
+  // traversal-free segment, so this always resolves to <repo-parent>/worktrees/<branch>.
+  const worktreePath = path.resolve(repoTopLevel, '..', 'worktrees', branch);
 
   // Invariant (defense in depth): the worktree must not land inside the source
   // repo OR the running CloudCLI app root, no matter what the input string was.

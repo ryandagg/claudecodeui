@@ -50,6 +50,13 @@ test('session archive queries hide archived rows from active project views', asy
       ['session-active', 'session-archived'],
     );
     assert.equal(sessionsDb.countSessionsByProjectPath('/workspace/demo-project'), 1);
+
+    // Search indexes and queries archived transcripts too, so it reads through
+    // this method rather than the active-only `getAllSessions()`.
+    assert.deepEqual(
+      sessionsDb.getAllSessionsIncludingArchived().map((session) => session.session_id).sort(),
+      ['session-active', 'session-archived'],
+    );
   });
 });
 

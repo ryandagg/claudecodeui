@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { closeConnection, initializeDatabase, searchIndexDb, toFtsMatchLiteral } from '@/modules/database/index.js';
-import { indexFileIncrementally } from '@/modules/providers/services/session-index.service.js';
+import { closeConnection, initializeDatabase, searchIndexDb, sessionsDb, toFtsMatchLiteral } from '@/modules/database/index.js';
+import { backfillAll, indexFileIncrementally } from '@/modules/providers/services/session-index.service.js';
 
 /**
  * Runs `runTest` against a fresh temp DB plus a temp directory for transcript
@@ -151,6 +151,31 @@ test('a transcript ending mid-line leaves the partial line for the next pass', a
     await appendFile(file, '\n');
     await indexFileIncrementally(file, '/proj');
     assert.equal(searchIndexDb.search(toFtsMatchLiteral('partial second'), 10).length, 1);
+  });
+});
+
+test('backfillAll indexes archived sessions alongside active ones', async () => {
+  await withIsolatedIndex(async (dir) => {
+    const activeFile = path.join(dir, 'active.jsonl');
+    const archivedFile = path.join(dir, 'archived.jsonl');
+    await writeFile(activeFile, assistantText('shared needle in an active session', 'a1'));
+    await writeFile(archivedFile, assistantText('shared needle in an archived session', 'b1'));
+
+    sessionsDb.createSession('s-active', 'claude', '/proj', 'Active', undefined, undefined, activeFile);
+    sessionsDb.createSession('s-archived', 'claude', '/proj', 'Archived', undefined, undefined, archivedFile);
+    sessionsDb.updateSessionIsArchived('s-archived', true);
+
+    const { indexedFiles } = await backfillAll();
+
+    // Both transcripts are indexed: archiving hides a session from the active
+    // list, it does not remove it from searchable history.
+    assert.equal(indexedFiles, 2);
+    const hits = searchIndexDb.search(toFtsMatchLiteral('shared needle'), 10);
+    assert.equal(hits.length, 2);
+    assert.deepEqual(
+      hits.map((hit) => path.basename(hit.jsonl_path)).sort(),
+      ['active.jsonl', 'archived.jsonl'],
+    );
   });
 });
 

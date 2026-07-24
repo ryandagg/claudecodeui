@@ -61,7 +61,7 @@ const SNIPPET_LENGTH = 150;
  * counts, so more rows than `limit` are pulled and then grouped/capped in
  * memory. This multiplier keeps enough candidates to fill `limit` sessions
  * even when several matches land in the same session (capped per session) or
- * in sessions that are filtered out (archived / archived project).
+ * in sessions that are filtered out (archived project).
  */
 const INDEX_FETCH_MULTIPLIER = 20;
 const INDEX_FETCH_CAP = 5000;
@@ -86,17 +86,18 @@ function toSummaryText(customName: string | null, fallback: string | null | unde
 }
 
 /**
- * Session rows keyed by their normalized transcript path, filtered to the
- * visible workspace (active sessions whose owning project is not archived).
+ * Session rows keyed by their normalized transcript path.
  *
- * The index stores rows for every transcript ever seen; this map is the
- * read-time visibility filter, mirroring the pre-index behavior where archived
- * sessions and sessions of archived projects never appeared in search.
+ * Archived sessions are searchable: archiving hides a session from the active
+ * sidebar list, but its transcript is still the user's history, so a string
+ * copied out of an archived conversation must be findable. Sessions belonging
+ * to an archived *project* stay excluded — archiving a whole workspace removes
+ * it from view, and its sessions are reachable through the archive view.
  */
 type SearchableSessionRow = SessionRepositoryRow & { provider: SearchableProvider };
 
 function buildVisibleSessionsByPath(): Map<string, SearchableSessionRow> {
-  const rows = sessionsDb.getAllSessions();
+  const rows = sessionsDb.getAllSessionsIncludingArchived();
   const byPath = new Map<string, SearchableSessionRow>();
   const projectArchiveStateByPath = new Map<string, boolean>();
 

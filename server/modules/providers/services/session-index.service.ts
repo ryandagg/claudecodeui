@@ -167,11 +167,14 @@ export async function indexFileIncrementally(
  * files whose recorded size still matches are skipped by
  * `indexFileIncrementally`. Yields the event loop periodically so the one-time
  * cold backfill does not block request handling.
+ *
+ * Archived sessions are included: archiving removes a session from the active
+ * sidebar list, but its transcript stays part of the user's searchable history.
  */
 export async function backfillAll(
   onProgress?: (indexed: number, total: number) => void,
 ): Promise<{ indexedFiles: number }> {
-  const sessions = sessionsDb.getAllSessions();
+  const sessions = sessionsDb.getAllSessionsIncludingArchived();
   const seen = new Set<string>();
   let processed = 0;
 

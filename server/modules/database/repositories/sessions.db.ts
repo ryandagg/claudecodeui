@@ -312,6 +312,23 @@ export const sessionsDb = {
   },
 
   /**
+   * Every session row, archived or not.
+   *
+   * Search is the intended caller: archiving hides a session from the active
+   * sidebar list, but its transcript is still the user's history, so content
+   * search must be able to index and find it. Active-list readers should keep
+   * using `getAllSessions()`.
+   */
+  getAllSessionsIncludingArchived(): SessionRow[] {
+    const db = getConnection();
+    const rows = db
+      .prepare(`SELECT ${SESSION_ROW_COLUMNS} FROM sessions`)
+      .all() as SessionRow[];
+
+    return normalizeSessionRows(rows);
+  },
+
+  /**
    * Archived rows are intentionally queried separately so the caller can render
    * them in a dedicated view without reintroducing them into active session lists.
    */

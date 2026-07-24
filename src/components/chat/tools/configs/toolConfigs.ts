@@ -22,7 +22,7 @@ export interface ToolDisplayConfig {
       icon?: string;
     };
     // Collapsible config
-    title?: string | ((input: any) => string);
+    title?: string | ((input: any, helpers?: any) => string);
     defaultOpen?: boolean;
     contentType?: 'diff' | 'markdown' | 'file-list' | 'todo-list' | 'text' | 'task' | 'question-answer';
     getContentProps?: (input: any, helpers?: any) => any;
@@ -39,6 +39,45 @@ export interface ToolDisplayConfig {
     getMessage?: (result: any) => string;
     getContentProps?: (result: any) => any;
   };
+}
+
+/**
+ * Resolve the answers for an AskUserQuestion tool call.
+ *
+ * The persisted tool-use INPUT only ever carries `questions` — the answers the
+ * user picked (including free-text "Other" responses) live in the tool RESULT.
+ * Reading them from the input made every answered question render as "Skipped",
+ * so we source them from the result here, with defensive fallbacks.
+ */
+export function extractAskUserQuestionAnswers(input: any, toolResult?: any): Record<string, string> {
+  // Preferred: the structured result carries a clean { question: answer } map
+  // (present on both live events and reloaded transcripts).
+  const structured = toolResult?.toolUseResult?.answers;
+  if (structured && typeof structured === 'object' && !Array.isArray(structured)) {
+    return structured as Record<string, string>;
+  }
+
+  // The live interactive panel may stash answers on the input via updatedInput.
+  if (input?.answers && typeof input.answers === 'object' && Object.keys(input.answers).length > 0) {
+    return input.answers as Record<string, string>;
+  }
+
+  // Last resort: best-effort parse of the human-readable result string, e.g.
+  //   Your questions have been answered: "Q1"="A1". "Q2"="A2". You can now continue...
+  const content = typeof toolResult?.content === 'string' ? toolResult.content : '';
+  if (content.includes('questions have been answered')) {
+    const answers: Record<string, string> = {};
+    const pairRegex = /"([^"]+)"="([\s\S]*?)"\.(?=\s|$)/g;
+    let match: RegExpExecArray | null;
+    while ((match = pairRegex.exec(content)) !== null) {
+      answers[match[1]] = match[2];
+    }
+    if (Object.keys(answers).length > 0) {
+      return answers;
+    }
+  }
+
+  return {};
 }
 
 export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
@@ -467,9 +506,10 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
   AskUserQuestion: {
     input: {
       type: 'collapsible',
-      title: (input: any) => {
+      title: (input: any, helpers?: any) => {
         const count = input.questions?.length || 0;
-        const hasAnswers = input.answers && Object.keys(input.answers).length > 0;
+        const answers = extractAskUserQuestionAnswers(input, helpers?.toolResult);
+        const hasAnswers = Object.keys(answers).length > 0;
         if (count === 1) {
           const header = input.questions[0]?.header || 'Question';
           return hasAnswers ? `${header} — answered` : header;
@@ -478,9 +518,9 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       },
       defaultOpen: true,
       contentType: 'question-answer',
-      getContentProps: (input: any) => ({
+      getContentProps: (input: any, helpers?: any) => ({
         questions: input.questions || [],
-        answers: input.answers || {}
+        answers: extractAskUserQuestionAnswers(input, helpers?.toolResult),
       }),
     },
     result: {

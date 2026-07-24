@@ -191,6 +191,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         break;
 
       case 'permission_request':
+        // AskUserQuestion renders its own rich answer card from the paired
+        // tool_use message, so the bare "Permission: AskUserQuestion" record is
+        // pure redundancy here — skip it to avoid a contentless duplicate.
+        if (msg.toolName === 'AskUserQuestion') {
+          break;
+        }
         converted.push({
           type: 'assistant',
           content: '',

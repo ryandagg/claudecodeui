@@ -210,19 +210,19 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   }
 
   if (displayConfig.type === 'collapsible') {
+    // Some tools (e.g. AskUserQuestion) render their answered state on the input
+    // card but need the tool RESULT to source it — thread it through helpers.
+    const helpers = { selectedProject, createDiff, onFileOpen, toolResult };
+
     const title = typeof displayConfig.title === 'function'
-      ? displayConfig.title(parsedData)
+      ? displayConfig.title(parsedData, helpers)
       : displayConfig.title || 'Details';
 
     const defaultOpen = displayConfig.defaultOpen !== undefined
       ? displayConfig.defaultOpen
       : autoExpandTools;
 
-    const contentProps = displayConfig.getContentProps?.(parsedData, {
-      selectedProject,
-      createDiff,
-      onFileOpen
-    }) || {};
+    const contentProps = displayConfig.getContentProps?.(parsedData, helpers) || {};
 
     let contentComponent: React.ReactNode = null;
 

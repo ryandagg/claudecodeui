@@ -2,7 +2,7 @@
 
 ## Dev Server Stability — Worktree Protocol
 
-The dev server (Vite `:5173` + tsx `:3021`) runs from the **main worktree** at this repo root.
+Ryan runs his dev server on the ports specified in the `dev:human-user` package.json script and runs from the branch checked out at ~/Documents/repos/claudecodeui/.
 Never edit source files here directly during implementation — broken intermediate states kill HMR and the server process.
 
 ### Starting any code change
@@ -24,41 +24,44 @@ git branch -D <branch>  # only if the user confirms deletion
 
 ### Implementation flow
 
-1. **Create a worktree:**
+1. **Create a worktree** (skip if this session already started in one):
    ```sh
-   git worktree add /tmp/ccui-<short-slug> -b feat/<short-slug> main
+   git worktree add ../worktrees/<short-slug> -b feat/<short-slug> main
    ```
-2. **Do all work** in `/tmp/ccui-<short-slug>`. Verify before merging:
+2. **Develop plan before implementation. Analyze code. Verify assumptions**
+3. **Implement**
+4. **Verify feature via browser quality assurance**
+   Develop a QA plan and debug. Fix findings.
+   Use the user's running dev server (ports dynamically chosen and reported in shell) or start one from the worktree. Use the chrome-devtools MCP to open the URL from the dev server output and verify:
+   - The golden path works
+   - Edge cases behave correctly
+   - No regressions in surrounding features
+
+   A change that compiles but wasn't browser-verified is not complete. This applies to **all changes**, including bulk removals and refactors — deleted modules leave dangling references in files that tsc may not catch (JS configs, dynamic imports, i18n registrations). The browser is the final arbiter.
+5. Ensure code quality:
    ```sh
    npm run lint && npm run typecheck
    ```
    Both must pass. Do NOT skip lint — deleted files leave dangling imports that tsc misses but Vite catches at runtime.
-3. **Merge to main** (from the main worktree):
+6. **Verify with Ryan**
+   Provide URL to running app and QA plan from prior step. Get approval for next steps.
+7. **Merge to main** (from the main worktree):
    ```sh
    cd /Users/rdagg/Documents/repos/claudecodeui
    git merge feat/<short-slug> --ff-only
    ```
    If fast-forward fails (main moved): rebase the feature branch in the worktree first.
-4. **Clean up:**
+8. **Clean up:**
    ```sh
-   git worktree remove /tmp/ccui-<short-slug>
+   git worktree remove ../worktrees/<short-slug>
    git branch -d feat/<short-slug>
    ```
 
 ### Multiple sessions working concurrently
-- Each session uses a **unique branch + worktree** (e.g. `/tmp/ccui-reactions`, `/tmp/ccui-sidebar-fix`).
+- Each session uses a **unique branch + worktree** (e.g. `../worktrees/reactions`, `../worktrees/sidebar-fix`).
 - Merges to main happen one at a time. If main moved, rebase before merging.
 - The dev server picks up changes naturally on merge (tsx watches `server/`, Vite HMRs frontend).
 - dev server ports are now handled via script. Check logs after any server restart for URL.
-
-### Verification — no change is done until tested in a browser
-
-After lint + typecheck pass, use the user's running dev server (default ports `:3001`/`:5173`) or start one from the worktree on those ports. Use chrome-devtools MCP to open `http://localhost:5173` and verify:
-- The golden path works
-- Edge cases behave correctly
-- No regressions in surrounding features
-
-A change that compiles but wasn't browser-verified is not complete. This applies to **all changes**, including bulk removals and refactors — deleted modules leave dangling references in files that tsc may not catch (JS configs, dynamic imports, i18n registrations). The browser is the final arbiter.
 
 ### Edge case: already editing in main worktree
 
@@ -67,7 +70,6 @@ A change that compiles but wasn't browser-verified is not complete. This applies
 
 ## Architecture
 
-- Vite client at `:5173` with HMR, tsx server at `:3021`
 - Auth neutralized (local fork, Bedrock env inherited from shell)
 - SQLite via `better-sqlite3`, schema in `server/modules/database/schema.ts`
 - Routes: `server/routes/*.js` (Express routers), registered in `server/index.js`

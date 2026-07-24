@@ -1,29 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, Loader2 } from 'lucide-react';
 
 import { Button, Input } from '../../../shared/view/ui';
-import { browseFilesystemFolders } from '../data/workspaceApi';
+import { browseFilesystemFolders, chooseDirectoryNatively } from '../data/workspaceApi';
 import { getSuggestionRootPath } from '../utils/pathUtils';
 import type { FolderSuggestion } from '../types';
-
-import FolderBrowserModal from './FolderBrowserModal';
 
 type WorkspacePathFieldProps = {
   value: string;
   disabled?: boolean;
   onChange: (path: string) => void;
-  onAdvanceToConfirm: () => void;
 };
 
 export default function WorkspacePathField({
   value,
   disabled = false,
   onChange,
-  onAdvanceToConfirm,
 }: WorkspacePathFieldProps) {
   const [pathSuggestions, setPathSuggestions] = useState<FolderSuggestion[]>([]);
   const [showPathDropdown, setShowPathDropdown] = useState(false);
-  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const [choosingDirectory, setChoosingDirectory] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
 
   useEffect(() => {
     if (value.trim().length <= 2) {
@@ -69,16 +66,23 @@ export default function WorkspacePathField({
     [onChange],
   );
 
-  const handleFolderSelected = useCallback(
-    (selectedPath: string, advanceToConfirm: boolean) => {
-      onChange(selectedPath);
-      setShowFolderBrowser(false);
-      if (advanceToConfirm) {
-        onAdvanceToConfirm();
+  const handleBrowse = useCallback(async () => {
+    setPickerError(null);
+    setChoosingDirectory(true);
+
+    try {
+      const chosenPath = await chooseDirectoryNatively();
+      // A null result means the user cancelled the native dialog — leave the field untouched.
+      if (chosenPath) {
+        onChange(chosenPath);
+        setShowPathDropdown(false);
       }
-    },
-    [onAdvanceToConfirm, onChange],
-  );
+    } catch (error) {
+      setPickerError(error instanceof Error ? error.message : 'Failed to open the folder picker');
+    } finally {
+      setChoosingDirectory(false);
+    }
+  }, [onChange]);
 
   return (
     <>
@@ -112,21 +116,22 @@ export default function WorkspacePathField({
         <Button
           type="button"
           variant="outline"
-          onClick={() => setShowFolderBrowser(true)}
+          onClick={handleBrowse}
           className="px-3"
           title="Browse folders"
-          disabled={disabled}
+          disabled={disabled || choosingDirectory}
         >
-          <FolderOpen className="h-4 w-4" />
+          {choosingDirectory ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FolderOpen className="h-4 w-4" />
+          )}
         </Button>
       </div>
 
-      <FolderBrowserModal
-        isOpen={showFolderBrowser}
-        autoAdvanceOnSelect={false}
-        onClose={() => setShowFolderBrowser(false)}
-        onFolderSelected={handleFolderSelected}
-      />
+      {pickerError && (
+        <p className="mt-1 text-xs text-red-600 dark:text-red-400">{pickerError}</p>
+      )}
     </>
   );
 }

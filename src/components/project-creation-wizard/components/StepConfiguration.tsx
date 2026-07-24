@@ -22,7 +22,6 @@ type StepConfigurationProps = {
   onTokenModeChange: (tokenMode: TokenMode) => void;
   onSelectedGithubTokenChange: (tokenId: string) => void;
   onNewGithubTokenChange: (tokenValue: string) => void;
-  onAdvanceToConfirm: () => void;
 };
 
 export default function StepConfiguration({
@@ -40,7 +39,6 @@ export default function StepConfiguration({
   onTokenModeChange,
   onSelectedGithubTokenChange,
   onNewGithubTokenChange,
-  onAdvanceToConfirm,
 }: StepConfigurationProps) {
   const { t } = useTranslation();
   const showGithubAuth = shouldShowGithubAuthentication(githubUrl);
@@ -56,7 +54,6 @@ export default function StepConfiguration({
           value={workspacePath}
           disabled={isCreating}
           onChange={onWorkspacePathChange}
-          onAdvanceToConfirm={onAdvanceToConfirm}
         />
 
         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">

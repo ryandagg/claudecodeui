@@ -176,7 +176,6 @@ export default function ProjectCreationWizard({
               onNewGithubTokenChange={(newGithubToken) =>
                 updateField('newGithubToken', newGithubToken)
               }
-              onAdvanceToConfirm={() => setStep(2)}
             />
           )}
 

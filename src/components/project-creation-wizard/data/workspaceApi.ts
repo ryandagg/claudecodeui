@@ -1,8 +1,8 @@
 import { api } from '../../../utils/api';
 import type {
   BrowseFilesystemResponse,
+  ChooseDirectoryResponse,
   CloneProgressEvent,
-  CreateFolderResponse,
   CreateProjectPayload,
   CreateProjectResponse,
   CredentialsResponse,
@@ -89,15 +89,23 @@ export const browseFilesystemFolders = async (pathToBrowse: string) => {
   };
 };
 
-export const createFolderInFilesystem = async (folderPath: string) => {
-  const response = await api.createFolder(folderPath);
-  const data = await parseJson<CreateFolderResponse>(response);
+/**
+ * Opens the OS-native folder picker (served by the local backend) and resolves
+ * to the chosen absolute path, or `null` when the user cancels the dialog.
+ */
+export const chooseDirectoryNatively = async (): Promise<string | null> => {
+  const response = await api.chooseDirectory();
+  const data = await parseJson<ChooseDirectoryResponse>(response);
 
   if (!response.ok) {
-    throw new Error(data.error || 'Failed to create folder');
+    throw new Error(data.error || 'Failed to open the folder picker');
   }
 
-  return data.path || folderPath;
+  if (data.canceled || !data.path) {
+    return null;
+  }
+
+  return data.path;
 };
 
 export const createProjectRequest = async (payload: CreateProjectPayload) => {

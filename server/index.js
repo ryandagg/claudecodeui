@@ -5,7 +5,7 @@ import fs, { promises as fsPromises } from 'fs';
 import path from 'path';
 import os from 'os';
 import http from 'http';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 
 import express from 'express';
 import cors from 'cors';
@@ -374,44 +374,43 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/create-folder', authenticateToken, async (req, res) => {
-    try {
-        const { path: folderPath } = req.body;
-        if (!folderPath) {
-            return res.status(400).json({ error: 'Path is required' });
-        }
-        const expandedPath = expandWorkspacePath(folderPath);
-        const resolvedInput = path.resolve(expandedPath);
-        const validation = await validateWorkspacePath(resolvedInput);
-        if (!validation.valid) {
-            return res.status(403).json({ error: validation.error });
-        }
-        const targetPath = validation.resolvedPath || resolvedInput;
-        const parentDir = path.dirname(targetPath);
-        try {
-            await fs.promises.access(parentDir);
-        } catch (err) {
-            return res.status(404).json({ error: 'Parent directory does not exist' });
-        }
-        try {
-            await fs.promises.access(targetPath);
-            return res.status(409).json({ error: 'Folder already exists' });
-        } catch (err) {
-            // Folder doesn't exist, which is what we want
-        }
-        try {
-            await fs.promises.mkdir(targetPath, { recursive: false });
-            res.json({ success: true, path: targetPath });
-        } catch (mkdirError) {
-            if (mkdirError.code === 'EEXIST') {
-                return res.status(409).json({ error: 'Folder already exists' });
-            }
-            throw mkdirError;
-        }
-    } catch (error) {
-        console.error('Error creating folder:', error);
-        res.status(500).json({ error: 'Failed to create folder' });
+// Opens the OS-native folder picker (macOS Finder) on the machine running the
+// server and returns the chosen absolute path. The browser cannot expose an
+// absolute filesystem path itself, so the local server drives the native dialog.
+app.post('/api/choose-directory', authenticateToken, async (req, res) => {
+    if (process.platform !== 'darwin') {
+        return res.status(501).json({
+            error: 'The native folder picker is only available on macOS. Type or paste a path instead.',
+        });
     }
+
+    // AppleScript: open "choose folder" starting at the workspace root and print
+    // the selection as a POSIX path. Cancelling raises error -128.
+    const script = [
+        'on run argv',
+        '  set defaultLoc to POSIX file (item 1 of argv)',
+        '  set chosenFolder to choose folder with prompt "Select project folder" default location defaultLoc',
+        '  return POSIX path of chosenFolder',
+        'end run',
+    ].flatMap((line) => ['-e', line]);
+
+    execFile('osascript', [...script, WORKSPACES_ROOT], (error, stdout, stderr) => {
+        if (error) {
+            // -128 is the standard "user canceled" code from a Cancel/⌘-. dismissal.
+            if (/-128|user canceled/i.test(stderr || error.message || '')) {
+                return res.json({ canceled: true });
+            }
+            console.error('Error opening native folder picker:', stderr || error.message);
+            return res.status(500).json({ error: 'Failed to open the folder picker' });
+        }
+
+        const chosenPath = stdout.trim().replace(/\/$/, '');
+        if (!chosenPath) {
+            return res.json({ canceled: true });
+        }
+
+        res.json({ path: chosenPath });
+    });
 });
 
 // Read file content endpoint

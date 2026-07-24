@@ -25,11 +25,10 @@ export type BrowseFilesystemResponse = {
   error?: string;
 };
 
-export type CreateFolderResponse = {
-  success?: boolean;
+export type ChooseDirectoryResponse = {
   path?: string;
+  canceled?: boolean;
   error?: string;
-  details?: string;
 };
 
 export type CreateProjectPayload = {

@@ -237,10 +237,10 @@ export const api = {
     return authenticatedFetch(`/api/browse-filesystem?${params}`);
   },
 
-  createFolder: (folderPath) =>
-    authenticatedFetch('/api/create-folder', {
+  // Opens the OS-native folder picker on the server host and resolves to the chosen path.
+  chooseDirectory: () =>
+    authenticatedFetch('/api/choose-directory', {
       method: 'POST',
-      body: JSON.stringify({ path: folderPath }),
     }),
 
   // User endpoints

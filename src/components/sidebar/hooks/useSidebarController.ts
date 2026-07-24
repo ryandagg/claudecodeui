@@ -343,7 +343,8 @@ export function useSidebarController({
     }
 
     const query = debouncedSearchQuery;
-    if (searchMode !== 'conversations' || query.length < 2) {
+    // Trigram FTS needs ≥3 chars; shorter queries can't match the index.
+    if (searchMode !== 'conversations' || query.length < 3) {
       searchSeqRef.current += 1;
       setConversationResults(null);
       setSearchProgress(null);

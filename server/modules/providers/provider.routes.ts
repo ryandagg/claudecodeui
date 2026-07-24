@@ -348,8 +348,9 @@ const parseSessionRenameSummary = (payload: unknown): string => {
 
 const parseSessionSearchQuery = (value: unknown): string => {
   const query = readOptionalQueryString(value) ?? '';
-  if (query.length < 2) {
-    throw new AppError('Query must be at least 2 characters', {
+  // Trigram FTS needs ≥3 chars; shorter queries can't match the index.
+  if (query.length < 3) {
+    throw new AppError('Query must be at least 3 characters', {
       code: 'INVALID_SEARCH_QUERY',
       statusCode: 400,
     });

@@ -6,6 +6,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
+import { sessionIndexService } from '@/modules/providers/services/session-index.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { LLMProvider } from '@/shared/types.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
@@ -224,6 +225,21 @@ async function onUpdate(
       filePath,
       sessionId: result.sessionId,
     });
+
+    // Index only the bytes appended since last time so a growing transcript
+    // stays searchable without re-reading the whole file on every poll.
+    if (provider === 'claude') {
+      const sessionRow = result.sessionId
+        ? sessionsDb.getSessionByProviderSessionId(result.sessionId) ?? sessionsDb.getSessionById(result.sessionId)
+        : null;
+      try {
+        await sessionIndexService.indexFileIncrementally(filePath, sessionRow?.project_path ?? null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('Incremental session indexing failed', { filePath, error: message });
+      }
+    }
+
     queuePendingWatcherUpdate(eventType, provider, result.sessionId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -246,6 +262,20 @@ export async function initializeSessionsWatcher(): Promise<void> {
     processedByProvider: initialSync.processedByProvider,
     failures: initialSync.failures,
   });
+
+  // Backfill the message search index from the freshly-synced session rows.
+  // Fire-and-forget so server startup is not blocked; the indexer yields the
+  // event loop periodically and skips files whose recorded size is unchanged,
+  // so this is cheap on every restart after the first cold run.
+  void sessionIndexService
+    .backfillAll()
+    .then(({ indexedFiles }) => {
+      console.log('Session search index backfill complete', { indexedFiles });
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('Session search index backfill failed', { error: message });
+    });
 
   for (const { provider, rootPath } of PROVIDER_WATCH_PATHS) {
     try {

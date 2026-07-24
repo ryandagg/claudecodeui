@@ -158,6 +158,46 @@ CREATE TABLE IF NOT EXISTS reactions (
 );
 `;
 
+// Full-text search over session-transcript messages.
+//
+// Uses the FTS5 `trigram` tokenizer, which indexes every 3-character sequence
+// so `MATCH` behaves like a case-insensitive substring (grep-style) search:
+// searching `config` finds `configuration` and `reconfigure`. This replaces the
+// previous ripgrep-per-query scan of the raw JSONL files. Trigram requires a
+// query of at least 3 characters.
+//
+// Rows are keyed by `jsonl_path` (the transcript file), not `session_id`, so
+// the mid-run app/provider session merge (which can delete or re-key a
+// session_id while the file path is stable) never orphans index rows. The
+// UNINDEXED columns are stored-but-not-tokenized metadata used to rebuild
+// results without re-reading the transcript on disk.
+export const SESSION_MESSAGE_INDEX_SCHEMA_SQL = `
+CREATE VIRTUAL TABLE IF NOT EXISTS session_message_index USING fts5(
+    jsonl_path UNINDEXED,
+    project_path UNINDEXED,
+    role UNINDEXED,
+    timestamp UNINDEXED,
+    message_uuid UNINDEXED,
+    seq UNINDEXED,
+    body,
+    tokenize = 'trigram'
+);
+`;
+
+// Per-file incremental cursor for the message index. `indexed_bytes` records
+// how many bytes of the append-only transcript have already been indexed, so
+// the watcher only reads and indexes newly appended lines. `file_size` lets a
+// shrink/rewrite be detected and trigger a full re-index of that file.
+export const SESSION_INDEX_FILES_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS session_index_files (
+    jsonl_path TEXT PRIMARY KEY,
+    project_path TEXT,
+    indexed_bytes INTEGER NOT NULL DEFAULT 0,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
 export const INIT_SCHEMA_SQL = `
 -- Initialize authentication database
 PRAGMA foreign_keys = ON;
@@ -208,4 +248,9 @@ CREATE INDEX IF NOT EXISTS idx_reactions_created ON reactions(created_at);
 
 ${USER_SETTINGS_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
+
+${SESSION_MESSAGE_INDEX_SCHEMA_SQL}
+
+${SESSION_INDEX_FILES_SCHEMA_SQL}
+CREATE INDEX IF NOT EXISTS idx_session_index_files_project ON session_index_files(project_path);
 `;

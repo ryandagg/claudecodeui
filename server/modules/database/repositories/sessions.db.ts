@@ -1,5 +1,8 @@
+import path from 'node:path';
+
 import { getConnection } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
+import { searchIndexDb } from '@/modules/database/repositories/search-index.db.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
 type SessionRow = {
@@ -395,6 +398,9 @@ export const sessionsDb = {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     db.prepare(`DELETE FROM sessions WHERE project_path = ?`).run(normalizedProjectPath);
+    // Mirror the deletion into the search index so a removed project's
+    // transcripts stop surfacing in conversation search.
+    searchIndexDb.deleteByProjectPath(normalizedProjectPath);
   },
 
   getSessionName(sessionId: string, provider: string): string | null {
@@ -425,7 +431,30 @@ export const sessionsDb = {
 
   deleteSessionById(sessionId: string): boolean {
     const db = getConnection();
-    return db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
+
+    // Capture the transcript path before deleting so its index rows can be
+    // mirrored out. Read first: after the DELETE the row is gone.
+    const row = db
+      .prepare('SELECT jsonl_path FROM sessions WHERE session_id = ?')
+      .get(sessionId) as { jsonl_path: string | null } | undefined;
+
+    const deleted = db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
+
+    const rawJsonlPath = typeof row?.jsonl_path === 'string' ? row.jsonl_path.trim() : '';
+    if (deleted && rawJsonlPath) {
+      // A transcript path can be shared by more than one session row (e.g. an
+      // app row and a provider row mid-merge). Only purge the index when no
+      // other session still references the file, so a delete of one row never
+      // blinds search for its sibling.
+      const stillReferenced = db
+        .prepare('SELECT 1 FROM sessions WHERE jsonl_path = ? LIMIT 1')
+        .get(rawJsonlPath) as { 1: number } | undefined;
+      if (!stillReferenced) {
+        searchIndexDb.deleteByJsonlPath(path.resolve(rawJsonlPath));
+      }
+    }
+
+    return deleted;
   },
 
   /**

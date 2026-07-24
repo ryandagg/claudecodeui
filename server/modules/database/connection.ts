@@ -116,6 +116,15 @@ export function getConnection(): Database.Database {
 
   instance = new Database(dbPath);
 
+  // WAL lets the read-heavy conversation search run concurrently with the
+  // startup index backfill and the file-watcher's incremental index writes.
+  // Under the default rollback journal a search issued mid-write throws
+  // SQLITE_BUSY; WAL permits many concurrent readers alongside one writer.
+  // busy_timeout makes the rare writer-vs-writer contention block briefly
+  // instead of throwing. Both are no-ops on :memory: databases.
+  instance.pragma('journal_mode = WAL');
+  instance.pragma('busy_timeout = 5000');
+
   // app_config must exist immediately — the auth middleware reads
   // the JWT secret at module-load time, before initializeDatabase() runs.
   instance.exec(APP_CONFIG_TABLE_SCHEMA_SQL);

@@ -21,7 +21,8 @@ type ProjectResult = {
   }>;
 };
 
-const MIN_QUERY = 2;
+// Trigram FTS needs ≥3 chars; shorter queries can't match the index.
+const MIN_QUERY = 3;
 const DEBOUNCE_MS = 250;
 
 export function useSessionMessageSearch(

@@ -217,6 +217,21 @@ async function getRepositoryRootPath(projectPath) {
   return stdout.trim();
 }
 
+/**
+ * Resolves the display name of the repository that owns `projectPath`. For a
+ * git worktree this is the ORIGINATING repo, not the worktree dir — e.g. a
+ * worktree at `…/worktrees/testing` owned by `…/claudecodeui` returns
+ * `claudecodeui`. Uses `--git-common-dir`, which points every linked worktree
+ * back at the main repo's shared `.git` (a plain repo returns its own `.git`).
+ * The result can be relative (e.g. just `.git` when run from the repo root), so
+ * it is resolved against `projectPath` before taking the parent's basename.
+ */
+async function getRepositoryDisplayName(projectPath) {
+  const { stdout } = await spawnAsync('git', ['rev-parse', '--git-common-dir'], { cwd: projectPath });
+  const commonDir = path.resolve(projectPath, stdout.trim());
+  return path.basename(path.dirname(commonDir));
+}
+
 function normalizeRepositoryRelativeFilePath(filePath) {
   return String(filePath)
     .replace(/\\/g, '/')
@@ -309,6 +324,9 @@ router.get('/status', async (req, res) => {
 
     const branch = await getCurrentBranchName(projectPath);
     const hasCommits = await repositoryHasCommits(projectPath);
+    // Owning repo name — for a worktree this is the originating repo, so the
+    // session header can show "<repo> · <branch>" instead of just the worktree dir.
+    const repo = await getRepositoryDisplayName(projectPath);
 
     // Get git status
     const { stdout: statusOutput } = await spawnAsync('git', ['status', '--porcelain'], { cwd: projectPath });
@@ -337,6 +355,7 @@ router.get('/status', async (req, res) => {
 
     res.json({
       branch,
+      repo,
       hasCommits,
       modified,
       added,

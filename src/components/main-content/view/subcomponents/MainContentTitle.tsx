@@ -1,8 +1,10 @@
+import { GitBranch } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type { AppTab, Project, ProjectSession } from '../../../../types/app';
 import { usePlugins } from '../../../../contexts/PluginsContext';
+import { useSessionRepoInfo } from '../../hooks/useSessionRepoInfo';
 
 type MainContentTitleProps = {
   activeTab: AppTab;
@@ -43,6 +45,38 @@ function getSessionTitle(session: ProjectSession): string {
   return (session.summary as string) || 'New Session';
 }
 
+/**
+ * Right-aligned "<repo> · <branch>" for the subtitle line. Reads git info
+ * (read-only) for the session's working directory; for a worktree the repo is
+ * the originating repository. Renders nothing until resolved, and a subtle
+ * hint when the directory is not a git repo.
+ */
+function RepoBranchBadge({ projectId }: { projectId: string | null | undefined }) {
+  const { t } = useTranslation();
+  const { repo, branch, isGitRepo, loading } = useSessionRepoInfo(projectId);
+
+  if (loading && !repo) {
+    return null;
+  }
+
+  if (!isGitRepo) {
+    return (
+      <span className="flex-shrink-0 whitespace-nowrap text-[11px] italic leading-tight text-muted-foreground/50">
+        {t('mainContent.notAGitRepo', { defaultValue: 'not a git repo' })}
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex min-w-0 flex-shrink items-center gap-1 whitespace-nowrap text-[11px] leading-tight text-muted-foreground/80">
+      <GitBranch className="h-3 w-3 flex-shrink-0" />
+      {repo && <span className="truncate font-medium">{repo}</span>}
+      {repo && branch && <span className="text-muted-foreground/40">·</span>}
+      {branch && <span className="truncate">{branch}</span>}
+    </span>
+  );
+}
+
 export default function MainContentTitle({
   activeTab,
   selectedProject,
@@ -73,19 +107,28 @@ export default function MainContentTitle({
             <h2 className="scrollbar-hide overflow-x-auto whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
               {getSessionTitle(selectedSession)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</span>
+              <RepoBranchBadge projectId={selectedProject.projectId} />
+            </div>
           </div>
         ) : showChatNewSession ? (
           <div className="min-w-0">
             <h2 className="text-base font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
-            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</span>
+              <RepoBranchBadge projectId={selectedProject.projectId} />
+            </div>
           </div>
         ) : (
           <div className="min-w-0">
             <h2 className="text-sm font-semibold leading-tight text-foreground">
               {getTabTitle(activeTab, shouldShowTasksTab, t, pluginDisplayName)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</span>
+              <RepoBranchBadge projectId={selectedProject.projectId} />
+            </div>
           </div>
         )}
       </div>

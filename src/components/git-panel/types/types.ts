@@ -20,6 +20,7 @@ export type GitPanelProps = {
 
 export type GitStatusResponse = {
   branch?: string;
+  repo?: string;
   hasCommits?: boolean;
   modified?: string[];
   added?: string[];

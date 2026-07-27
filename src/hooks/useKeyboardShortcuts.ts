@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -129,67 +129,51 @@ const parseBindings = (raw: string | null): ShortcutBindings => {
   }
 };
 
-type Action =
-  | { type: 'set'; id: ShortcutActionId; binding: string }
-  | { type: 'set_many'; value: Partial<ShortcutBindings> }
-  | { type: 'reset'; id?: ShortcutActionId };
-
-function reducer(state: ShortcutBindings, action: Action): ShortcutBindings {
-  switch (action.type) {
-    case 'set': {
-      if (!VALID_IDS.has(action.id) || state[action.id] === action.binding) return state;
-      return { ...state, [action.id]: action.binding };
-    }
-    case 'set_many': {
-      const next = sanitize({ ...state, ...action.value });
-      // Only produce a new object when something actually changed.
-      const changed = ACTION_IDS.some((id) => next[id] !== state[id]);
-      return changed ? next : state;
-    }
-    case 'reset': {
-      if (action.id) {
-        if (state[action.id] === DEFAULTS[action.id]) return state;
-        return { ...state, [action.id]: DEFAULTS[action.id] };
-      }
-      return { ...DEFAULTS };
-    }
-    default:
-      return state;
-  }
+/**
+ * Read the current bindings. Derived straight from the reactive `settings`
+ * object rather than held in local state, so every hook instance re-renders
+ * with the new value the moment any instance persists an edit. Handlers should
+ * prefer this over `useKeyboardShortcuts` — it cannot write, so it can't
+ * clobber stored bindings with pre-load defaults.
+ */
+export function useShortcutBindings(): ShortcutBindings {
+  const { settings } = useSettings();
+  const raw = settings[STORAGE_KEY] ?? null;
+  return useMemo(() => parseBindings(raw), [raw]);
 }
 
 /**
- * Read/edit the persisted keyboard-shortcut bindings. Changes are written to
- * the DB-backed settings store, which shares them across all hook instances.
+ * Read/edit the persisted keyboard-shortcut bindings. Writes happen only in
+ * response to an explicit `setBinding`/`resetBinding` call — never from an
+ * effect watching state, which under StrictMode's double-invoked effects would
+ * race a pre-load default against the stored value on every page load.
  */
 export function useKeyboardShortcuts() {
-  const { getSetting, setSetting, ready } = useSettings();
-  const [bindings, dispatch] = useReducer(reducer, undefined, () => (
-    parseBindings(getSetting(STORAGE_KEY))
-  ));
-  const didHydrateRef = useRef(false);
+  const { setSetting } = useSettings();
+  const bindings = useShortcutBindings();
 
-  // Re-sync when settings finish loading or another instance persists a change.
-  useEffect(() => {
-    dispatch({ type: 'set_many', value: parseBindings(getSetting(STORAGE_KEY)) });
-  }, [ready, getSetting]);
+  // Persist against the freshest bindings, so back-to-back edits can't drop one.
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
+
+  const persist = useCallback((next: ShortcutBindings) => {
+    bindingsRef.current = next;
+    setSetting(STORAGE_KEY, JSON.stringify(next));
+  }, [setSetting]);
 
   const setBinding = useCallback((id: ShortcutActionId, binding: string) => {
-    dispatch({ type: 'set', id, binding });
-  }, []);
+    if (!VALID_IDS.has(id) || bindingsRef.current[id] === binding) return;
+    persist({ ...bindingsRef.current, [id]: binding });
+  }, [persist]);
 
   const resetBinding = useCallback((id?: ShortcutActionId) => {
-    dispatch({ type: 'reset', id });
-  }, []);
-
-  // Skip the first run so the pre-load default never clobbers the stored value.
-  useEffect(() => {
-    if (!didHydrateRef.current) {
-      didHydrateRef.current = true;
+    if (!id) {
+      persist({ ...DEFAULTS });
       return;
     }
-    setSetting(STORAGE_KEY, JSON.stringify(bindings));
-  }, [bindings, setSetting]);
+    if (bindingsRef.current[id] === DEFAULTS[id]) return;
+    persist({ ...bindingsRef.current, [id]: DEFAULTS[id] });
+  }, [persist]);
 
   return { bindings, setBinding, resetBinding };
 }
@@ -198,8 +182,8 @@ export function useKeyboardShortcuts() {
  * Register a global keydown listener that invokes `handler` when the bound
  * shortcut for `actionId` is pressed. The handler is kept in a ref so callers
  * don't need to memoize it; the listener rebinds only when the binding or
- * `enabled` changes. Reads the current binding live from localStorage on each
- * mount and stays in sync via the same broadcast the editor emits.
+ * `enabled` changes. Subscribes read-only to the stored bindings, so an edit in
+ * the settings editor takes effect immediately without a reload.
  */
 export function useShortcutHandler(
   actionId: ShortcutActionId,
@@ -209,7 +193,7 @@ export function useShortcutHandler(
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
-  const { bindings } = useKeyboardShortcuts();
+  const bindings = useShortcutBindings();
   const binding = bindings[actionId];
 
   useEffect(() => {

@@ -173,10 +173,13 @@ export default function SidebarConversationList({
           <div key={`${project.projectId}-${session.id}`} className="group relative">
             <a
               href={`/session/${session.id}`}
+              aria-current={isSelected ? 'true' : undefined}
               className={cn(
                 buttonVariants({ variant: 'ghost' }),
                 'h-auto w-full flex-col items-start gap-1 rounded-md border bg-card p-2 text-left font-normal transition-all duration-150',
-                isSelected ? 'border-primary/20 bg-primary/5' : 'border-border/30 hover:bg-accent/50',
+                isSelected
+                  ? 'border-primary/50 border-l-[3px] border-l-primary bg-primary/10 shadow-sm dark:bg-primary/15'
+                  : 'border-border/30 hover:bg-accent/50',
               )}
               onClick={(event) => {
                 if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -188,12 +191,17 @@ export default function SidebarConversationList({
                 <div
                   className={cn(
                     'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md',
-                    isSelected ? 'bg-primary/10' : 'bg-muted/50',
+                    isSelected ? 'bg-primary/25 ring-1 ring-primary/40' : 'bg-muted/50',
                   )}
                 >
                   <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
                 </div>
-                <span className="min-w-0 flex-1 truncate text-xs font-normal text-foreground">
+                <span
+                  className={cn(
+                    'min-w-0 flex-1 truncate text-xs text-foreground',
+                    isSelected ? 'font-semibold' : 'font-normal',
+                  )}
+                >
                   {view.sessionName}
                 </span>
                 {isProcessing ? (

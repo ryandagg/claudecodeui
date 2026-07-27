@@ -95,8 +95,25 @@ export default function ToolGroupContainer({
     return extraCount > 0 ? `${previewText}, +${extraCount} more` : previewText;
   }, [group.messages]);
 
+  // Collapsed groups keep their children out of the DOM entirely, so search
+  // navigation can't find a target message by uuid until the group expands.
+  // Publishing the contained uuids on the wrapper lets it locate the right
+  // group, expand it, then anchor on the child. Tool-result uuids count too: a
+  // hit inside a tool result is addressed by the result's own uuid.
+  const containedUuids = useMemo(
+    () => group.messages
+      .flatMap((message) => [message.messageUuid, message.resultMessageUuid])
+      .filter(Boolean)
+      .join(' '),
+    [group.messages],
+  );
+
   return (
-    <div className="chat-message tool px-3 sm:px-0" data-message-timestamp={group.timestamp || undefined}>
+    <div
+      className="chat-message tool px-3 sm:px-0"
+      data-message-timestamp={group.timestamp || undefined}
+      data-group-message-uuids={containedUuids || undefined}
+    >
       <button
         type="button"
         className={`group flex w-full items-center gap-2 border-l-2 ${borderClass} rounded-r-md bg-muted/25 px-3 py-2 text-left transition-colors hover:bg-muted/40 dark:bg-muted/10 dark:hover:bg-muted/20`}

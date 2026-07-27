@@ -202,5 +202,11 @@
     "providers": {
       "assistant": "Assistant"
     }
+  },
+  "sessionSearch": {
+    "jumpingToResult": "検索結果に移動しています…",
+    "openingSession": "一致が含まれるセッションを開いています…",
+    "viewingResult": "検索結果を表示中（{{total}} 件中 {{start}}–{{end}} 件目）",
+    "returnToConversation": "会話に戻る"
   }
 }

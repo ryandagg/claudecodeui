@@ -235,5 +235,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "Sonraki görevi başlat"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "Arama sonucuna gidiliyor…",
+    "openingSession": "Eşleşmeyi içeren oturum açılıyor…",
+    "viewingResult": "Arama sonucu görüntüleniyor ({{total}} mesajdan {{start}}–{{end}})",
+    "returnToConversation": "Sohbete dön"
   }
 }

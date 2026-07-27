@@ -246,5 +246,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "Start the next task"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "Jumping to search result…",
+    "openingSession": "Opening the session that contains your match…",
+    "viewingResult": "Viewing search result (messages {{start}}–{{end}} of {{total}})",
+    "returnToConversation": "Return to conversation"
   }
 }

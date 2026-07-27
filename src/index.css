@@ -966,3 +966,33 @@
     }
   }
 }
+
+/* cmd+F-style highlighting of the search term inside the transcript, painted via
+   the CSS Custom Highlight API (see chat/utils/inChatHighlight.ts) so no DOM
+   React owns has to be mutated. Colors match the sidebar result snippets
+   (HighlightedSnippet) so a hit reads the same in both places.
+
+   Deliberately outside @layer components: ::highlight() only accepts a small set
+   of properties, and an unlayered rule keeps it from being outranked by the
+   foreground colors syntax-highlighted code sets on its own spans. */
+::highlight(search-term) {
+  background-color: rgb(254 240 138); /* yellow-200 */
+  color: rgb(24 24 27);
+}
+
+.dark ::highlight(search-term) {
+  background-color: rgb(133 77 14); /* yellow-800 */
+  color: rgb(250 250 250);
+}
+
+/* The match navigated to gets the stronger "current find" treatment, as Chrome
+   does with its orange active match. */
+::highlight(search-term-current) {
+  background-color: rgb(251 146 60); /* orange-400 */
+  color: rgb(24 24 27);
+}
+
+.dark ::highlight(search-term-current) {
+  background-color: rgb(194 65 12); /* orange-700 */
+  color: rgb(250 250 250);
+}

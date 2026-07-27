@@ -113,6 +113,7 @@ function ChatInterface({
     visibleMessageCount,
     visibleMessages,
     searchWindow,
+    searchNavPending,
     dismissSearchWindow,
     loadEarlierMessages,
     loadAllMessages,
@@ -312,17 +313,32 @@ function ChatInterface({
 
   const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
 
+  // Feedback while a clicked search hit is being opened: the session may not be
+  // in the sidebar's lazy-loaded page, so there is a real gap between the click
+  // and the transcript appearing. Without this the click looks like a no-op.
+  const searchNavIndicator = searchNavPending ? (
+    <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center">
+      <div className="flex items-center gap-2 rounded-full bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground shadow-lg">
+        <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+        <span>{t('sessionSearch.jumpingToResult', { defaultValue: 'Jumping to search result…' })}</span>
+      </div>
+    </div>
+  ) : null;
+
   if (!selectedProject) {
     const selectedProviderLabel = t('messageTypes.claude');
 
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="relative flex h-full items-center justify-center">
+        {searchNavIndicator}
         <div className="text-center text-muted-foreground">
           <p className="text-sm">
-            {t('projectSelection.startChatWithProvider', {
-              provider: selectedProviderLabel,
-              defaultValue: 'Select a project to start chatting with {{provider}}',
-            })}
+            {searchNavPending
+              ? t('sessionSearch.openingSession', { defaultValue: 'Opening the session that contains your match…' })
+              : t('projectSelection.startChatWithProvider', {
+                provider: selectedProviderLabel,
+                defaultValue: 'Select a project to start chatting with {{provider}}',
+              })}
           </p>
         </div>
       </div>
@@ -331,7 +347,8 @@ function ChatInterface({
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="relative flex h-full min-h-0 flex-col">
+        {searchNavIndicator}
         <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
@@ -386,13 +403,18 @@ function ChatInterface({
         {searchWindow && (
           <div className="flex items-center justify-between border-t border-border/60 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/30">
             <span className="text-xs text-amber-800 dark:text-amber-200">
-              Viewing search result (messages {searchWindow.start + 1}&ndash;{searchWindow.end} of {chatMessages.length})
+              {t('sessionSearch.viewingResult', {
+                start: searchWindow.start + 1,
+                end: searchWindow.end,
+                total: chatMessages.length,
+                defaultValue: 'Viewing search result (messages {{start}}–{{end}} of {{total}})',
+              })}
             </span>
             <button
               className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
               onClick={dismissSearchWindow}
             >
-              Return to conversation
+              {t('sessionSearch.returnToConversation', { defaultValue: 'Return to conversation' })}
             </button>
           </div>
         )}

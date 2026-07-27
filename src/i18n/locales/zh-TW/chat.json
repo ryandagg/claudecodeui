@@ -253,5 +253,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "開始下一個任務"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "正在跳至搜尋結果…",
+    "openingSession": "正在開啟包含相符內容的工作階段…",
+    "viewingResult": "檢視搜尋結果（共 {{total}} 則訊息中的第 {{start}}–{{end}} 則）",
+    "returnToConversation": "返回對話"
   }
 }

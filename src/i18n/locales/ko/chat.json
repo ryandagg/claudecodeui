@@ -217,5 +217,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "다음 작업 시작"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "검색 결과로 이동 중…",
+    "openingSession": "일치 항목이 있는 세션을 여는 중…",
+    "viewingResult": "검색 결과 보기 (전체 {{total}}개 중 {{start}}–{{end}}번 메시지)",
+    "returnToConversation": "대화로 돌아가기"
   }
 }

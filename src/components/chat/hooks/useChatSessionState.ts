@@ -8,11 +8,31 @@ import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage } from '../types/types';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
+import {
+  clearSearchHighlights,
+  expandCollapsedMatches,
+  highlightQueryInElement,
+  scrollRangeIntoView,
+} from '../utils/inChatHighlight';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
+/**
+ * How long the "jumping to search result" indicator waits before giving up.
+ * Cold sessions are read from disk and lazily loaded, which can take a few
+ * seconds on the largest transcripts; beyond this the navigation has failed and
+ * a stuck spinner is worse than none.
+ */
+const SEARCH_NAV_TIMEOUT_MS = 20000;
+
+type SearchTarget = {
+  timestamp?: string;
+  uuid?: string;
+  snippet?: string;
+  query?: string;
+};
 
 interface UseChatSessionStateArgs {
   selectedProject: Project | null;
@@ -89,6 +109,142 @@ function chatMessageToNormalized(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Helpers: locating a search hit in the loaded transcript            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Does a rendered message's uuid identify the searched transcript entry?
+ *
+ * Search results carry the bare transcript uuid, while one transcript entry can
+ * expand into several messages suffixed `<uuid>_<partIndex>` (see the Claude
+ * provider's normalizer), so a prefix comparison is the correct test.
+ */
+function matchesMessageUuid(messageUuid: unknown, targetUuid: string): boolean {
+  if (typeof messageUuid !== 'string' || !messageUuid) return false;
+  return messageUuid === targetUuid || messageUuid.startsWith(`${targetUuid}_`);
+}
+
+/**
+ * Collapse runs of whitespace to single spaces and lowercase, so a server
+ * snippet (newlines already flattened) can be compared against rendered
+ * `textContent` (newlines and indentation intact).
+ */
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * Index of the matched message in the loaded array, used to pick the render
+ * window. Prefers the exact uuid; falls back to nearest timestamp.
+ */
+function findTargetMessageIndex(messages: ChatMessage[], target: SearchTarget): number {
+  if (target.uuid) {
+    const uuid = target.uuid;
+    const exactIndex = messages.findIndex((message) => matchesMessageUuid(message.messageUuid, uuid));
+    if (exactIndex >= 0) return exactIndex;
+
+    // A hit inside a tool result: that result is folded into its tool_use row,
+    // so the row carrying it is the one to window around.
+    const resultIndex = messages.findIndex((message) => matchesMessageUuid(message.resultMessageUuid, uuid));
+    if (resultIndex >= 0) return resultIndex;
+  }
+
+  if (!target.timestamp) return -1;
+
+  const targetDate = new Date(target.timestamp).getTime();
+  if (Number.isNaN(targetDate)) return -1;
+
+  let closestDiff = Infinity;
+  let closestIndex = -1;
+  for (let i = 0; i < messages.length; i++) {
+    const messageTime = new Date(messages[i].timestamp as string | number).getTime();
+    if (Number.isNaN(messageTime)) continue;
+    const diff = Math.abs(messageTime - targetDate);
+    if (diff < closestDiff) {
+      closestDiff = diff;
+      closestIndex = i;
+    }
+  }
+  return closestIndex;
+}
+
+/**
+ * Resolve the rendered element to scroll to, in descending order of precision:
+ * exact uuid, collapsed tool group containing that uuid, snippet text, nearest
+ * timestamp. `needsExpansion` marks the collapsed-group case, whose children
+ * aren't in the DOM until the caller expands it.
+ */
+function locateTargetElement(
+  container: HTMLElement,
+  target: SearchTarget,
+): { element: HTMLElement; needsExpansion: boolean } | null {
+  if (target.uuid) {
+    for (const element of container.querySelectorAll('[data-message-uuid]')) {
+      if (matchesMessageUuid(element.getAttribute('data-message-uuid'), target.uuid) && element instanceof HTMLElement) {
+        return { element, needsExpansion: false };
+      }
+    }
+
+    // A hit inside a tool result. The result isn't a message of its own — it
+    // renders inside the tool_use row that published this attribute.
+    for (const element of container.querySelectorAll('[data-result-message-uuid]')) {
+      if (matchesMessageUuid(element.getAttribute('data-result-message-uuid'), target.uuid) && element instanceof HTMLElement) {
+        return { element, needsExpansion: false };
+      }
+    }
+
+    for (const element of container.querySelectorAll('[data-group-message-uuids]')) {
+      const uuids = (element.getAttribute('data-group-message-uuids') || '').split(' ');
+      if (uuids.some((uuid) => matchesMessageUuid(uuid, target.uuid as string)) && element instanceof HTMLElement) {
+        return { element, needsExpansion: true };
+      }
+    }
+  }
+
+  // Snippet text. Server snippets strip surrounding "..." and flatten newlines,
+  // so only a leading slice is compared, and only when it's long enough to be
+  // meaningfully distinctive. Both sides are whitespace-normalized: the snippet
+  // collapses the transcript's newlines and indentation to single spaces, while
+  // `textContent` preserves whatever the renderer emitted, so a raw comparison
+  // misses every match that spans a line break.
+  if (target.snippet) {
+    const cleanSnippet = target.snippet.replace(/^\.{3}/, '').replace(/\.{3}$/, '');
+    const searchPhrase = normalizeWhitespace(cleanSnippet).slice(0, 80).trim();
+    if (searchPhrase.length >= 10) {
+      for (const element of container.querySelectorAll('.chat-message')) {
+        if (normalizeWhitespace(element.textContent || '').includes(searchPhrase) && element instanceof HTMLElement) {
+          return { element, needsExpansion: element.classList.contains('tool') };
+        }
+      }
+    }
+  }
+
+  if (target.timestamp) {
+    const targetDate = new Date(target.timestamp).getTime();
+    if (!Number.isNaN(targetDate)) {
+      let closestDiff = Infinity;
+      let closest: HTMLElement | null = null;
+      for (const element of container.querySelectorAll('[data-message-timestamp]')) {
+        const timestamp = element.getAttribute('data-message-timestamp');
+        if (!timestamp || !(element instanceof HTMLElement)) continue;
+        const elementDate = new Date(timestamp).getTime();
+        if (Number.isNaN(elementDate)) continue;
+        const diff = Math.abs(elementDate - targetDate);
+        if (diff < closestDiff) {
+          closestDiff = diff;
+          closest = element;
+        }
+      }
+      if (closest) {
+        return { element: closest, needsExpansion: closest.classList.contains('tool') };
+      }
+    }
+  }
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Hook                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -130,8 +286,30 @@ export function useChatSessionState({
   const [viewHiddenCount, setViewHiddenCount] = useState(0);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [searchTarget, setSearchTarget] = useState<{ timestamp?: string; uuid?: string; snippet?: string } | null>(null);
+  const [searchTarget, setSearchTarget] = useState<SearchTarget | null>(null);
+  /**
+   * True from the moment a search hit is clicked until it's scrolled into view
+   * (or times out). Covers the whole gap — project selection, disk read, lazy
+   * load — during which the click otherwise looked like it did nothing.
+   */
+  const [searchNavPending, setSearchNavPending] = useState(false);
   const searchScrollActiveRef = useRef(false);
+  /** Query whose in-chat marks are currently applied, so they can be cleared. */
+  const highlightedQueryRef = useRef<string | null>(null);
+  /**
+   * The target whose navigation has already been launched. The scroll effect
+   * re-runs as messages stream in, so this keeps it to one attempt per target
+   * without clearing the target itself (which is what made a hit need two or
+   * three clicks).
+   */
+  const startedSearchTargetRef = useRef<SearchTarget | null>(null);
+  /**
+   * Bumped whenever a navigation is superseded or abandoned. The in-flight async
+   * walk compares against it instead of using effect cleanup: the effect's own
+   * state writes would re-run it and cancel the navigation it just started.
+   */
+  const searchNavGenerationRef = useRef(0);
+  const searchNavTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const _isLoadingSessionRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
@@ -154,6 +332,19 @@ export function useChatSessionState({
   const previousNewSessionTriggerRef = useRef(newSessionTrigger ?? 0);
 
   const createDiff = useMemo<DiffCalculator>(() => createCachedDiffCalculator(), []);
+
+  /**
+   * Abandon any in-flight search navigation: invalidate its generation and drop
+   * its pending timers, so a superseded jump can't scroll or highlight on top of
+   * a newer one.
+   */
+  const cancelSearchNavigation = useCallback(() => {
+    searchNavGenerationRef.current += 1;
+    for (const timer of searchNavTimersRef.current) clearTimeout(timer);
+    searchNavTimersRef.current = [];
+    searchScrollActiveRef.current = false;
+    startedSearchTargetRef.current = null;
+  }, []);
 
   useEffect(() => {
     const trigger = newSessionTrigger ?? 0;
@@ -193,8 +384,11 @@ export function useChatSessionState({
     setLoadAllJustFinished(false);
     setShowLoadAllOverlay(false);
     setViewHiddenCount(0);
+    cancelSearchNavigation();
+    clearSearchHighlights();
+    highlightedQueryRef.current = null;
     setSearchTarget(null);
-    searchScrollActiveRef.current = false;
+    setSearchNavPending(false);
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
     pendingInitialScrollRef.current = true;
@@ -208,7 +402,7 @@ export function useChatSessionState({
       clearTimeout(loadAllFinishedTimerRef.current);
       loadAllFinishedTimerRef.current = null;
     }
-  }, [newSessionTrigger, onSessionIdle, resetStreamingState]);
+  }, [cancelSearchNavigation, newSessionTrigger, onSessionIdle, resetStreamingState]);
 
   /* ---------------------------------------------------------------- */
   /*  Derive processing state for the viewed session                  */
@@ -625,119 +819,193 @@ export function useChatSessionState({
     isProcessing,
   ]);
 
-  // Search navigation target
+  // Search navigation target.
+  //
+  // A hit is often in a session the sidebar never lazy-loaded, so this fires
+  // long before any messages exist. `searchNavPending` drives the "jumping to
+  // your search result" indicator across that whole gap — it can't be derived
+  // from `isLoadingSessionMessages`, which stays false until the project is
+  // selected and the fetch actually starts.
   useEffect(() => {
     const session = selectedSession as Record<string, unknown> | null;
     const targetSnippet = session?.__searchTargetSnippet;
     const targetTimestamp = session?.__searchTargetTimestamp;
-    if (typeof targetSnippet === 'string' && targetSnippet) {
-      searchScrollActiveRef.current = true;
-      setSearchTarget({
-        snippet: targetSnippet,
-        timestamp: typeof targetTimestamp === 'string' ? targetTimestamp : undefined,
-      });
-    }
-  }, [selectedSession]);
+    const targetUuid = session?.__searchTargetUuid;
+    const query = session?.__searchQuery;
 
-  // Scroll to search target
+    const hasTarget = (typeof targetSnippet === 'string' && targetSnippet)
+      || (typeof targetUuid === 'string' && targetUuid);
+    if (!hasTarget) return;
+
+    // Supersede whatever a previously clicked hit still had in flight.
+    cancelSearchNavigation();
+    searchScrollActiveRef.current = true;
+    setSearchNavPending(true);
+    setSearchTarget({
+      snippet: typeof targetSnippet === 'string' ? targetSnippet : undefined,
+      timestamp: typeof targetTimestamp === 'string' ? targetTimestamp : undefined,
+      uuid: typeof targetUuid === 'string' ? targetUuid : undefined,
+      query: typeof query === 'string' ? query : undefined,
+    });
+  }, [cancelSearchNavigation, selectedSession]);
+
+  // Give up on the indicator if the session simply never loads, so a failed
+  // navigation doesn't leave a spinner up forever.
   useEffect(() => {
-    if (!searchTarget || chatMessages.length === 0 || isLoadingSessionMessages) return;
+    if (!searchNavPending) return;
+    const timeout = setTimeout(() => {
+      cancelSearchNavigation();
+      setSearchNavPending(false);
+      setSearchTarget(null);
+    }, SEARCH_NAV_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [cancelSearchNavigation, searchNavPending]);
 
+  // Scroll to the search target and highlight the query around it.
+  //
+  // The target survives until messages are actually in hand. Consuming it up
+  // front (as this used to) threw it away whenever the effect ran before
+  // hydration — the normal case for a session the sidebar hadn't loaded — which
+  // is why the same hit needed two or three clicks. The started-ref keeps the
+  // re-runs idempotent instead: the effect fires again as messages arrive, but
+  // launches at most one navigation per target.
+  useEffect(() => {
+    if (!searchTarget || startedSearchTargetRef.current === searchTarget) return;
+    if (chatMessages.length === 0 || isLoadingSessionMessages) return;
+
+    startedSearchTargetRef.current = searchTarget;
     const target = searchTarget;
-    setSearchTarget(null);
+
+    // Generation guard rather than effect cleanup: `finish()` clears
+    // `searchTarget`, which re-runs this effect, so a cleanup-based cancel would
+    // abort the very navigation that had just started.
+    const generation = ++searchNavGenerationRef.current;
+    const isStale = () => searchNavGenerationRef.current !== generation;
+
+    const delay = (ms: number) => new Promise<void>((resolve) => {
+      searchNavTimersRef.current.push(setTimeout(resolve, ms));
+    });
+
+    // Every exit path runs this, so the "jumping to search result" indicator
+    // can't be left spinning after a failed or abandoned jump.
+    const finish = () => {
+      if (isStale()) return;
+      searchScrollActiveRef.current = false;
+      setSearchNavPending(false);
+      setSearchTarget(null);
+    };
 
     const scrollToTarget = async () => {
       const SEARCH_WINDOW_PADDING = 25;
+      const targetIndex = findTargetMessageIndex(chatMessages, target);
 
-      // Find the target message index by timestamp in the already-loaded array.
-      let targetIndex = -1;
-      if (target.timestamp) {
-        const targetDate = new Date(target.timestamp).getTime();
-        if (!Number.isNaN(targetDate)) {
-          let closestDiff = Infinity;
-          for (let i = 0; i < chatMessages.length; i++) {
-            const msg = chatMessages[i];
-            const msgTime = new Date(msg.timestamp as string | number).getTime();
-            if (Number.isNaN(msgTime)) continue;
-            const diff = Math.abs(msgTime - targetDate);
-            if (diff < closestDiff) { closestDiff = diff; targetIndex = i; }
-          }
-        }
-      }
-
-      // Set a narrow rendering window around the target instead of all messages.
+      // Render a narrow window around the target rather than the whole
+      // transcript — sessions here run to thousands of messages.
       if (targetIndex >= 0) {
-        const start = Math.max(0, targetIndex - SEARCH_WINDOW_PADDING);
-        const end = Math.min(chatMessages.length, targetIndex + SEARCH_WINDOW_PADDING + 1);
-        setSearchWindow({ start, end });
+        setSearchWindow({
+          start: Math.max(0, targetIndex - SEARCH_WINDOW_PADDING),
+          end: Math.min(chatMessages.length, targetIndex + SEARCH_WINDOW_PADDING + 1),
+        });
       } else {
         setSearchWindow({ start: 0, end: Math.min(chatMessages.length, 50) });
       }
 
-      // Let React render the windowed slice.
-      await new Promise(resolve => setTimeout(resolve, 80));
+      // Let React commit the windowed slice.
+      await delay(80);
+      if (isStale()) return;
 
-      const findAndScroll = (retriesLeft: number) => {
+      const findAndScroll = async (retriesLeft: number): Promise<void> => {
+        if (isStale()) return;
+
         const container = scrollContainerRef.current;
-        if (!container) return;
+        if (!container) {
+          finish();
+          return;
+        }
 
-        let targetElement: Element | null = null;
+        const found = locateTargetElement(container, target);
 
-        // Strategy 1: Find by visible text content (works for user/assistant text).
-        if (target.snippet) {
-          const cleanSnippet = target.snippet.replace(/^\.{3}/, '').replace(/\.{3}$/, '').trim();
-          const searchPhrase = cleanSnippet.slice(0, 80).toLowerCase().trim();
-          if (searchPhrase.length >= 10) {
-            const messageElements = container.querySelectorAll('.chat-message');
-            for (const el of messageElements) {
-              const text = (el.textContent || '').toLowerCase();
-              if (text.includes(searchPhrase)) { targetElement = el; break; }
-            }
+        if (!found) {
+          if (retriesLeft > 0) {
+            await delay(150);
+            return findAndScroll(retriesLeft - 1);
+          }
+          finish();
+          return;
+        }
+
+        // A collapsed tool group keeps its children out of the DOM, so expand it
+        // and re-resolve to the specific child message before scrolling.
+        let targetElement = found.element;
+        if (found.needsExpansion) {
+          // `:scope >` so an already-expanded group's nested collapsible triggers
+          // can't be mistaken for the group's own toggle.
+          const expandBtn = targetElement.querySelector(':scope > button[aria-expanded="false"]');
+          if (expandBtn instanceof HTMLElement) {
+            expandBtn.click();
+            await delay(120);
+            if (isStale()) return;
+            const expanded = locateTargetElement(container, target);
+            if (expanded) targetElement = expanded.element;
           }
         }
 
-        // Strategy 2: Find by timestamp (works for tool results and collapsed content).
-        if (!targetElement && target.timestamp) {
-          const targetDate = new Date(target.timestamp).getTime();
-          if (!Number.isNaN(targetDate)) {
-            const messageElements = container.querySelectorAll('[data-message-timestamp]');
-            let closestDiff = Infinity;
-            for (const el of messageElements) {
-              const ts = el.getAttribute('data-message-timestamp');
-              if (!ts) continue;
-              const elDate = new Date(ts).getTime();
-              if (Number.isNaN(elDate)) continue;
-              const diff = Math.abs(elDate - targetDate);
-              if (diff < closestDiff) { closestDiff = diff; targetElement = el; }
-            }
+        targetElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        targetElement.classList.add('search-highlight-flash');
+        searchNavTimersRef.current.push(
+          setTimeout(() => targetElement.classList.remove('search-highlight-flash'), 4000),
+        );
+
+        // cmd+F-style highlighting of the term itself, inside the message.
+        if (target.query) {
+          highlightedQueryRef.current = target.query;
+
+          // Tool parameters and results sit in collapsed sections that clip
+          // their contents to zero height, so a match inside one would be
+          // highlighted and still invisible. Open them, then wait out the
+          // grid-rows transition so ranges measure against settled layout.
+          if (expandCollapsedMatches(targetElement, target.query) > 0) {
+            await delay(260);
+            if (isStale()) return;
+          }
+
+          const ranges = highlightQueryInElement(targetElement, target.query);
+          if (ranges.length > 0) {
+            // Let the message's own smooth scroll settle, then center on the
+            // matched text rather than the message: a long tool result can be
+            // taller than the viewport, leaving the term offscreen even when its
+            // message is "centered".
+            await delay(400);
+            if (isStale()) return;
+            scrollRangeIntoView(ranges[0], container);
           }
         }
 
-        if (targetElement) {
-          targetElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
-          targetElement.classList.add('search-highlight-flash');
-          setTimeout(() => targetElement?.classList.remove('search-highlight-flash'), 4000);
-          searchScrollActiveRef.current = false;
-
-          if (targetElement.classList.contains('tool')) {
-            const expandBtn = targetElement.querySelector('button[aria-expanded="false"]');
-            if (expandBtn instanceof HTMLElement) {
-              expandBtn.click();
-            }
-          }
-        } else if (retriesLeft > 0) {
-          setTimeout(() => findAndScroll(retriesLeft - 1), 150);
-        } else {
-          searchScrollActiveRef.current = false;
-        }
+        finish();
       };
 
-      setTimeout(() => findAndScroll(5), 80);
+      await findAndScroll(5);
     };
 
-    scrollToTarget();
+    void scrollToTarget();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatMessages.length, isLoadingSessionMessages, searchTarget]);
+
+  // Drop the term highlights once the user leaves the search context, so stale
+  // marks don't linger over an unrelated conversation.
+  useEffect(() => {
+    if (searchWindow || !highlightedQueryRef.current) return;
+    clearSearchHighlights();
+    highlightedQueryRef.current = null;
+  }, [searchWindow]);
+
+  // Unmount: drop timers and highlights rather than leaving them to fire against
+  // a torn-down tree or paint over the next conversation.
+  useEffect(() => () => {
+    cancelSearchNavigation();
+    clearSearchHighlights();
+    highlightedQueryRef.current = null;
+  }, [cancelSearchNavigation]);
 
   // Initial token usage fetch for providers with file-backed usage data.
   useEffect(() => {
@@ -906,6 +1174,8 @@ export function useChatSessionState({
   }, [selectedSession, selectedProject, isLoadingAllMessages, currentSessionId, sessionStore]);
 
   const dismissSearchWindow = useCallback(() => {
+    clearSearchHighlights();
+    highlightedQueryRef.current = null;
     setSearchWindow(null);
   }, []);
 
@@ -934,6 +1204,7 @@ export function useChatSessionState({
     visibleMessageCount,
     visibleMessages,
     searchWindow,
+    searchNavPending,
     dismissSearchWindow,
     loadEarlierMessages,
     loadAllMessages,

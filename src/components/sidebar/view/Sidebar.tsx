@@ -87,6 +87,7 @@ function Sidebar({
     confirmDeleteProject,
     handleProjectSelect,
     openArchivedSession,
+    openSearchResultSession,
     restoreArchivedProject,
     restoreArchivedSession,
     refreshProjects,
@@ -251,29 +252,7 @@ function Sidebar({
                 { isArchived: true },
               );
             }}
-            onConversationResultClick={(projectId: string | null, sessionId: string, provider: string, messageTimestamp?: string | null, messageSnippet?: string | null) => {
-              const resolvedProvider = (provider || 'claude') as LLMProvider;
-              const project = projectId ? projects.find(p => p.projectId === projectId) : null;
-              const searchTarget = { __searchTargetTimestamp: messageTimestamp || null, __searchTargetSnippet: messageSnippet || null };
-              const sessionObj = {
-                id: sessionId,
-                __provider: resolvedProvider,
-                __projectId: projectId ?? undefined,
-                ...searchTarget,
-              };
-              if (project) {
-                const sessions = getProjectSessions(project);
-                const existing = sessions.find(s => s.id === sessionId)
-                  || (project.sessions || []).find(s => s.id === sessionId);
-                if (existing) {
-                  handleSessionClick({ __provider: resolvedProvider, ...existing, ...searchTarget }, project.projectId);
-                } else {
-                  handleSessionClick(sessionObj, project.projectId);
-                }
-              } else {
-                handleSessionClick(sessionObj, projectId ?? '');
-              }
-            }}
+            onConversationResultClick={openSearchResultSession}
             onRefresh={() => {
               void refreshProjects();
             }}

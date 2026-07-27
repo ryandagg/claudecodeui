@@ -235,5 +235,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "Начать следующую задачу"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "Переход к результату поиска…",
+    "openingSession": "Открывается сеанс с найденным совпадением…",
+    "viewingResult": "Результат поиска (сообщения {{start}}–{{end}} из {{total}})",
+    "returnToConversation": "Вернуться к беседе"
   }
 }

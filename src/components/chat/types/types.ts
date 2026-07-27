@@ -55,6 +55,18 @@ export interface ChatMessage {
   type: string;
   content?: string;
   displayText?: string;
+  /**
+   * Transcript uuid of the source entry, or `<uuid>_<partIndex>` when one
+   * transcript entry expands into several messages. Search navigation anchors
+   * on this. Distinct from `id` on purpose — see `normalizedToChatMessages`.
+   */
+  messageUuid?: string;
+  /**
+   * Transcript uuid of the tool_result folded into this tool_use row. That
+   * result is never its own message, so this is the only way a search hit inside
+   * one can be located in the DOM.
+   */
+  resultMessageUuid?: string;
   timestamp: string | number | Date;
   images?: ChatImage[];
   reasoning?: string;

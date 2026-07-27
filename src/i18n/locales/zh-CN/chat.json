@@ -217,5 +217,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "开始下一个任务"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "正在跳转到搜索结果…",
+    "openingSession": "正在打开包含匹配内容的会话…",
+    "viewingResult": "查看搜索结果（共 {{total}} 条消息中的第 {{start}}–{{end}} 条）",
+    "returnToConversation": "返回对话"
   }
 }

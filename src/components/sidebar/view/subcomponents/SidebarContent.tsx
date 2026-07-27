@@ -4,7 +4,7 @@ import type { TFunction } from 'i18next';
 
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project } from '../../../../types/app';
-import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
+import type { ConversationResultTarget, ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, SidebarSearchMode } from '../../types/types';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import { useSettings } from '../../../../contexts/SettingsContext';
@@ -48,8 +48,18 @@ type ConversationSessionResult = {
   sessionId: string;
   sessionSummary: string;
   provider?: string;
-  matches: { role: string; snippet: string; highlights: { start: number; end: number }[] }[];
+  matches: {
+    role: string;
+    snippet: string;
+    highlights: { start: number; end: number }[];
+    timestamp?: string | null;
+    provider?: string;
+    // Transcript uuid of the matched message. The exact anchor the chat pane
+    // scrolls to — text/timestamp matching is only a fallback.
+    messageUuid?: string | null;
+  }[];
 };
+
 
 function CollapsibleSessionResult({ session, onNavigate, onMatchClick }: { session: ConversationSessionResult; onNavigate: () => void; onMatchClick: (matchIndex: number) => void }) {
   const [expanded, setExpanded] = useState(true);
@@ -205,7 +215,7 @@ type SidebarContentProps = {
   onDeleteArchivedSession: (session: ArchivedSessionListItem) => void;
   // Conversation result clicks pass back the DB projectId (or null when the
   // server couldn't resolve it). Consumers must handle the null case.
-  onConversationResultClick: (projectId: string | null, sessionId: string, provider: string, messageTimestamp?: string | null, messageSnippet?: string | null) => void;
+  onConversationResultClick: (target: ConversationResultTarget) => void;
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
@@ -253,7 +263,10 @@ export default function SidebarContent({
     () => compilePatterns(parseHiddenSessionPatterns(hiddenPatternsRaw)),
     [hiddenPatternsRaw],
   );
-  const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
+  // Matches the controller's trigram floor (useSidebarController): below 3 chars
+  // no query is ever dispatched, so showing the results view would render an
+  // empty search pane with nothing in flight.
+  const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 3;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
   const groupedArchivedSessions = groupArchivedSessionsByProject(archivedSessions);
 
@@ -336,26 +349,27 @@ export default function SidebarContent({
                       {projectResult.projectDisplayName}
                     </span>
                   </div>
-                  {projectResult.sessions.map((session) => (
-                    <CollapsibleSessionResult
-                      key={`${projectResult.projectId ?? projectResult.projectName}-${session.sessionId}`}
-                      session={session}
-                      onNavigate={() => onConversationResultClick(
-                        projectResult.projectId,
-                        session.sessionId,
-                        session.provider || session.matches[0]?.provider || 'claude',
-                        session.matches[0]?.timestamp,
-                        session.matches[0]?.snippet
-                      )}
-                      onMatchClick={(matchIndex) => onConversationResultClick(
-                        projectResult.projectId,
-                        session.sessionId,
-                        session.provider || session.matches[matchIndex]?.provider || 'claude',
-                        session.matches[matchIndex]?.timestamp,
-                        session.matches[matchIndex]?.snippet
-                      )}
-                    />
-                  ))}
+                  {projectResult.sessions.map((session) => {
+                    const toTarget = (matchIndex: number): ConversationResultTarget => ({
+                      projectId: projectResult.projectId,
+                      sessionId: session.sessionId,
+                      provider: session.provider || session.matches[matchIndex]?.provider || 'claude',
+                      sessionSummary: session.sessionSummary,
+                      messageTimestamp: session.matches[matchIndex]?.timestamp,
+                      messageSnippet: session.matches[matchIndex]?.snippet,
+                      messageUuid: session.matches[matchIndex]?.messageUuid,
+                      query: conversationResults.query,
+                    });
+
+                    return (
+                      <CollapsibleSessionResult
+                        key={`${projectResult.projectId ?? projectResult.projectName}-${session.sessionId}`}
+                        session={session}
+                        onNavigate={() => onConversationResultClick(toTarget(0))}
+                        onMatchClick={(matchIndex) => onConversationResultClick(toTarget(matchIndex))}
+                      />
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -597,7 +611,7 @@ export default function SidebarContent({
         ) : searchMode === 'conversations' ? (
           // Conversations view (short/empty query): a flat, recency-sorted list
           // of every loaded session, project shown as an informational label.
-          // A query of >=2 chars switches to the server full-text search above.
+          // A query of >=3 chars switches to the server full-text search above.
           <SidebarConversationList
             projectListProps={projectListProps}
             searchFilter={searchFilter}

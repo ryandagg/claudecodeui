@@ -39,6 +39,13 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
   for (const msg of messages) {
     const sharedMetadata = {
+      // Transcript uuid (or `<uuid>_<partIndex>` for one part of a multi-part
+      // assistant turn). Search results carry the bare uuid, so navigation
+      // anchors on a prefix match. Deliberately NOT named `id`:
+      // `getIntrinsicMessageKey` prefers `id`, and populating it would rewrite
+      // every React key at once, remounting messages and losing local state
+      // such as expanded tool blocks.
+      messageUuid: msg.id,
       displayText: msg.displayText,
       commandName: msg.commandName,
       commandMessage: msg.commandMessage,
@@ -89,7 +96,11 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       }
 
       case 'tool_use': {
-        const tr = msg.toolResult || (msg.toolId ? toolResultMap.get(msg.toolId) : null);
+        // The transcript entry the result came from, when it's in the loaded set.
+        // Kept separate from `tr` (which may be the server-attached copy) because
+        // only the normalized message carries a uuid.
+        const resultMessage = msg.toolId ? toolResultMap.get(msg.toolId) : null;
+        const tr = msg.toolResult || resultMessage;
         const isSubagentContainer = msg.toolName === 'Task';
 
         // Build child tools from subagentTools
@@ -119,6 +130,11 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           content: '',
           timestamp: msg.timestamp,
           isToolUse: true,
+          // A tool_result is folded into its tool_use rather than rendered as
+          // its own message, so its transcript uuid would otherwise never reach
+          // the DOM — and a search hit inside a tool result is addressed by
+          // exactly that uuid. Carry it along so navigation can anchor here.
+          resultMessageUuid: resultMessage?.id,
           toolName: msg.toolName,
           toolInput: typeof msg.toolInput === 'string' ? msg.toolInput : JSON.stringify(msg.toolInput ?? '', null, 2),
           toolId: msg.toolId,

@@ -237,5 +237,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "Commencer la prochaine tâche"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "Accès au résultat de recherche…",
+    "openingSession": "Ouverture de la session contenant la correspondance…",
+    "viewingResult": "Résultat de recherche (messages {{start}}–{{end}} sur {{total}})",
+    "returnToConversation": "Revenir à la conversation"
   }
 }

@@ -38,7 +38,13 @@ const Collapsible = React.forwardRef<HTMLDivElement, CollapsibleProps>(
 
     return (
       <CollapsibleContext.Provider value={value}>
-        <div ref={ref} data-state={open ? 'open' : 'closed'} className={className} {...props}>
+        <div
+          ref={ref}
+          data-collapsible-root=""
+          data-state={open ? 'open' : 'closed'}
+          className={className}
+          {...props}
+        >
           {children}
         </div>
       </CollapsibleContext.Provider>
@@ -64,6 +70,7 @@ const CollapsibleTrigger = React.forwardRef<HTMLButtonElement, React.ButtonHTMLA
         ref={ref}
         type="button"
         aria-expanded={open}
+        data-collapsible-trigger=""
         data-state={open ? 'open' : 'closed'}
         onClick={handleClick}
         className={className}
@@ -83,6 +90,7 @@ const CollapsibleContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes
     return (
       <div
         ref={ref}
+        data-collapsible-content=""
         data-state={open ? 'open' : 'closed'}
         className={cn(
           'grid transition-[grid-template-rows] duration-200 ease-out',

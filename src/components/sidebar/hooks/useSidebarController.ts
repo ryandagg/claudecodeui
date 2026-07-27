@@ -70,6 +70,21 @@ export type SearchProgress = {
   totalProjects: number;
 };
 
+/** Everything needed to open a conversation-search hit at the matched message. */
+export type ConversationResultTarget = {
+  projectId: string | null;
+  sessionId: string;
+  provider: string;
+  /** Session title from the search index, so the header isn't left as "New Session". */
+  sessionSummary: string;
+  messageTimestamp?: string | null;
+  messageSnippet?: string | null;
+  /** Transcript uuid of the matched message — the exact scroll anchor. */
+  messageUuid?: string | null;
+  /** The raw search query, re-highlighted inside the chat like Chrome's cmd+F. */
+  query: string;
+};
+
 /**
  * How recently a session must have had activity to count as "running" in the
  * sidebar's Running view. Matches the 10-minute window the Project view uses
@@ -922,6 +937,44 @@ export function useSidebarController({
     onSessionSelect(sessionPayload);
   }, [archivedProjects, handleProjectSelect, onSessionSelect, projects]);
 
+  /**
+   * Open a conversation-search hit at the matched message.
+   *
+   * Search spans the whole index, so a hit is frequently in a session the
+   * sidebar has not lazy-loaded (20 per project) — and often in a project that
+   * isn't selected at all. Chat renders nothing without a `selectedProject`, so
+   * the project must be selected first, exactly as `openArchivedSession` does.
+   *
+   * The payload also carries the search index's own session title, so the header
+   * shows the real name instead of falling back to "New Session" for sessions
+   * absent from the loaded page.
+   */
+  const openSearchResultSession = useCallback((target: ConversationResultTarget) => {
+    const matchingProject = target.projectId
+      ? projects.find((candidate) => candidate.projectId === target.projectId) ?? null
+      : null;
+
+    if (matchingProject) {
+      handleProjectSelect(matchingProject);
+    }
+
+    const loadedSession = matchingProject
+      ? (matchingProject.sessions || []).find((candidate) => candidate.id === target.sessionId)
+      : undefined;
+
+    onSessionSelect({
+      ...loadedSession,
+      id: target.sessionId,
+      summary: loadedSession?.summary || target.sessionSummary,
+      __provider: (target.provider || 'claude') as LLMProvider,
+      __projectId: matchingProject?.projectId ?? target.projectId ?? undefined,
+      __searchTargetTimestamp: target.messageTimestamp || null,
+      __searchTargetSnippet: target.messageSnippet || null,
+      __searchTargetUuid: target.messageUuid || null,
+      __searchQuery: target.query || null,
+    });
+  }, [handleProjectSelect, onSessionSelect, projects]);
+
   const restoreArchivedProject = useCallback(async (projectId: string) => {
     try {
       const response = await api.restoreProject(projectId);
@@ -1058,6 +1111,7 @@ export function useSidebarController({
     confirmDeleteProject,
     handleProjectSelect,
     openArchivedSession,
+    openSearchResultSession,
     restoreArchivedProject,
     restoreArchivedSession,
     refreshProjects,

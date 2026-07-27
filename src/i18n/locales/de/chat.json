@@ -235,5 +235,11 @@
   },
   "tasks": {
     "nextTaskPrompt": "Nächste Aufgabe starten"
+  },
+  "sessionSearch": {
+    "jumpingToResult": "Springe zum Suchergebnis…",
+    "openingSession": "Sitzung mit dem Treffer wird geöffnet…",
+    "viewingResult": "Suchergebnis ansehen (Nachrichten {{start}}–{{end}} von {{total}})",
+    "returnToConversation": "Zurück zur Unterhaltung"
   }
 }

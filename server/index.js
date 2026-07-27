@@ -583,9 +583,29 @@ app.get('/api/projects/:projectId/files', authenticateToken, async (req, res) =>
             return res.status(404).json({ error: `Project path not found: ${actualPath}` });
         }
 
-        const files = await getFileTree(actualPath, 10, 0, true);
+        // Clients abort this request routinely (project switches, unmounts).
+        // Without this the walk runs to completion and holds the whole tree in
+        // memory to serialize a response that will never be read.
+        let clientGone = false;
+        req.on('close', () => {
+            clientGone = true;
+        });
+
+        const files = await getFileTree(actualPath, 10, 0, true, {
+            isAborted: () => clientGone,
+            skipNestedWorktrees: true,
+        });
+
+        if (clientGone) {
+            return;
+        }
+
         res.json(files);
     } catch (error) {
+        if (error instanceof FileTreeAbortedError) {
+            // The socket is already gone; there is nobody to respond to.
+            return;
+        }
         console.error('[ERROR] File tree error:', error.message);
         res.status(500).json({ error: error.message });
     }
@@ -1519,6 +1539,28 @@ const IGNORED_DIRS = new Set([
     '.gradle', '.idea', 'coverage', '.nyc_output'
 ]);
 
+// Git worktree containers hold full checkouts of sibling branches. Walking one
+// as part of its parent project multiplies the traversal by the number of live
+// worktrees — on a directory of ~90 repos that was 1.34M entries and ~2GB of
+// heap for a single request, enough to OOM the server.
+//
+// Skipped by name only *below* the scan root, never at the root itself, so
+// opening a worktree as its own project still returns its full tree. Each
+// worktree the app creates is registered as a separate project, so nothing
+// becomes unreachable — only the redundant nested copy is skipped.
+const NESTED_WORKTREE_DIR_NAMES = new Set(['worktrees']);
+
+/**
+ * Thrown when a client disconnects mid-traversal so the walk can unwind
+ * instead of spending another 40s building a response nobody will read.
+ */
+class FileTreeAbortedError extends Error {
+    constructor() {
+        super('File tree traversal aborted');
+        this.name = 'FileTreeAbortedError';
+    }
+}
+
 const DEFAULT_FS_CONCURRENCY = 64;
 const parsedFsConcurrency = Number.parseInt(process.env.FS_CONCURRENCY || '', 10);
 const FS_CONCURRENCY = Number.isFinite(parsedFsConcurrency) && parsedFsConcurrency > 0
@@ -1548,7 +1590,16 @@ function release() {
     activeFsOperations = Math.max(0, activeFsOperations - 1);
 }
 
-async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true) {
+async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true, options = {}) {
+    const { isAborted, skipNestedWorktrees = false } = options;
+
+    // Cancellation is checked before each readdir: the walk fans out through
+    // Promise.all, so this is the point where in-flight branches notice the
+    // client is gone and stop scheduling more work.
+    if (isAborted?.()) {
+        throw new FileTreeAbortedError();
+    }
+
     // Using fsPromises from import
     let entries;
     try {
@@ -1566,7 +1617,20 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
         return [];
     }
 
-    const filteredEntries = entries.filter((entry) => !(entry.isDirectory() && IGNORED_DIRS.has(entry.name)));
+    const filteredEntries = entries.filter((entry) => {
+        if (!entry.isDirectory()) {
+            return true;
+        }
+        if (IGNORED_DIRS.has(entry.name)) {
+            return false;
+        }
+        // Only below the root: a worktree opened as its own project keeps its
+        // full tree because its own name is never tested here.
+        if (skipNestedWorktrees && NESTED_WORKTREE_DIR_NAMES.has(entry.name)) {
+            return false;
+        }
+        return true;
+    });
 
     // Process every entry in parallel. On high-latency filesystems (NFS/SMB)
     // serial stat() was the real bottleneck — issuing them concurrently lets
@@ -1623,7 +1687,7 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
             // The recursive call starts with a bounded readdir; holding a permit
             // for the whole subtree can deadlock when sibling directories are
             // waiting on their own children.
-            item.children = await getFileTree(itemPath, maxDepth, currentDepth + 1, showHidden);
+            item.children = await getFileTree(itemPath, maxDepth, currentDepth + 1, showHidden, options);
         }
 
         return item;

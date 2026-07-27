@@ -2,7 +2,7 @@
 
 ## Dev Server Stability — Worktree Protocol
 
-Ryan runs his dev server on the ports specified in the `dev:human-user` package.json script and runs from the branch checked out at ~/Documents/repos/claudecodeui/.
+Humans run their dev server on the ports specified in the `dev:human-user` package.json script and runs from the branch checked out at ~/Documents/repos/claudecodeui/.
 Never edit source files here directly during implementation — broken intermediate states kill HMR and the server process.
 
 ### Starting any code change
@@ -32,7 +32,7 @@ git branch -D <branch>  # only if the user confirms deletion
 3. **Implement**
 4. **Verify feature via browser quality assurance**
    Develop a QA plan and debug. Fix findings.
-   Use the user's running dev server (ports dynamically chosen and reported in shell) or start one from the worktree. Use the chrome-devtools MCP to open the URL from the dev server output and verify:
+   Use `npm run dev`  (ports dynamically chosen and reported in shell) from the worktree. Use the chrome-devtools MCP to open the URL from the dev server output and verify:
    - The golden path works
    - Edge cases behave correctly
    - No regressions in surrounding features
@@ -43,7 +43,7 @@ git branch -D <branch>  # only if the user confirms deletion
    npm run lint && npm run typecheck
    ```
    Both must pass. Do NOT skip lint — deleted files leave dangling imports that tsc misses but Vite catches at runtime.
-6. **Verify with Ryan**
+6. **Verify with User**
    Provide URL to running app and QA plan from prior step. Get approval for next steps.
 7. **Merge to main** (from the main worktree):
    ```sh

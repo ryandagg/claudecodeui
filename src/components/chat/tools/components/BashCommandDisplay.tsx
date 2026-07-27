@@ -78,6 +78,11 @@ export const BashCommandDisplay: React.FC<BashCommandDisplayProps> = ({
         role={hasOutput ? 'button' : undefined}
         tabIndex={hasOutput ? 0 : undefined}
         aria-expanded={hasOutput ? open : undefined}
+        // A closed row leaves its output out of the DOM entirely, so search
+        // navigation can neither find a match inside it nor test for one. These
+        // let it open the row first and look afterwards.
+        data-output-toggle={hasOutput ? '' : undefined}
+        data-state={open ? 'open' : 'closed'}
         onClick={toggle}
         onKeyDown={(event) => {
           if (hasOutput && (event.key === 'Enter' || event.key === ' ')) {

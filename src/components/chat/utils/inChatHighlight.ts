@@ -33,6 +33,15 @@ const SKIPPED_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT'
 const CLOSED_CONTENT_SELECTOR = '[data-collapsible-content][data-state="closed"]';
 
 /**
+ * A closed command row (`BashCommandDisplay`) is the harder case: it omits its
+ * output from the DOM entirely rather than clipping it. Nothing can be tested
+ * for a match beforehand, so these open unconditionally — the enclosing message
+ * is already known to match, and the output is the likeliest place the term
+ * actually lives.
+ */
+const HIDDEN_OUTPUT_SELECTOR = '[data-output-toggle][data-state="closed"]';
+
+/**
  * Ceiling on how many sections one navigation opens. A short query can appear in
  * every tool block of a message; the point is to reveal the match the user
  * clicked, not to unfold the entire turn.
@@ -55,7 +64,18 @@ export function expandCollapsedMatches(element: Element | null | undefined, quer
   // Collected before any clicking: `data-state` only flips once React re-renders,
   // so the list would be unreliable if it were re-queried mid-loop.
   const closedSections = Array.from(element.querySelectorAll(CLOSED_CONTENT_SELECTOR));
+  const hiddenOutputs = Array.from(element.querySelectorAll(HIDDEN_OUTPUT_SELECTOR));
   let expanded = 0;
+
+  // Command output first: it's absent from the DOM, so a match there is
+  // invisible to the text test the clipped sections below rely on.
+  for (const toggle of hiddenOutputs) {
+    if (expanded >= MAX_AUTO_EXPANDED_SECTIONS) break;
+    if (!(toggle instanceof HTMLElement)) continue;
+
+    toggle.click();
+    expanded += 1;
+  }
 
   // Document order, so an outer section opens before the ones nested inside it.
   for (const content of closedSections) {

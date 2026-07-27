@@ -127,8 +127,9 @@
     "unassigned": "Unassigned",
     "editBinding": "Edit shortcut",
     "resetBinding": "Reset to default",
-    "conflict": "Also assigned to \"{{action}}\"",
+    "conflictRejected": "Already used by \"{{action}}\" — press another combination.",
     "hint": "Click a shortcut, then press the key combination. Press Escape to cancel.",
+    "reservedNote": "Some combinations are reserved by your browser or operating system and won't reach the app. If a shortcut does nothing, try a different one.",
     "actions": {
       "newSessionInCurrentDir": {
         "label": "New session in current directory",

@@ -99,51 +99,69 @@ export default function KeyboardShortcutsSettingsTab() {
   const { t } = useTranslation('settings');
   const { bindings, setBinding, resetBinding } = useKeyboardShortcuts();
   const [recordingId, setRecordingId] = useState<ShortcutActionId | null>(null);
+  // Which action rejected the last capture, and the combo it already owns.
+  const [rejected, setRejected] = useState<{
+    id: ShortcutActionId;
+    conflictWith: ShortcutActionId;
+  } | null>(null);
 
   const handleCapture = useCallback(
     (id: ShortcutActionId, binding: string) => {
-      setBinding(id, binding);
+      const conflictWith = setBinding(id, binding);
+      // Stay in recording mode on a conflict so the next press replaces it
+      // directly, instead of making the user re-open the recorder.
+      if (conflictWith) {
+        setRejected({ id, conflictWith });
+        return;
+      }
+      setRejected(null);
       setRecordingId(null);
     },
     [setBinding],
   );
 
-  // The binding a given combo is already assigned to, so we can warn on conflicts.
-  const conflictFor = (id: ShortcutActionId): string | null => {
-    const binding = bindings[id];
-    const other = SHORTCUT_DEFINITIONS.find((d) => d.id !== id && bindings[d.id] === binding);
-    return other ? t(other.labelKey) : null;
+  const startRecording = useCallback((id: ShortcutActionId) => {
+    setRejected(null);
+    setRecordingId(id);
+  }, []);
+
+  const labelFor = (id: ShortcutActionId): string => {
+    const def = SHORTCUT_DEFINITIONS.find((d) => d.id === id);
+    return def ? t(def.labelKey) : id;
   };
 
   return (
     <div className="space-y-8">
       <SettingsSection title={t('shortcuts.title')} description={t('shortcuts.description')}>
         <div className="space-y-2">
-          {SHORTCUT_DEFINITIONS.map((def) => {
-            const conflict = conflictFor(def.id);
-            return (
-              <div key={def.id} className="space-y-1">
-                <ShortcutRow
-                  labelKey={def.labelKey}
-                  descriptionKey={def.descriptionKey}
-                  binding={bindings[def.id]}
-                  isRecording={recordingId === def.id}
-                  onStartRecording={() => setRecordingId(def.id)}
-                  onStopRecording={() => setRecordingId((current) => (current === def.id ? null : current))}
-                  onCapture={(binding) => handleCapture(def.id, binding)}
-                  onReset={() => resetBinding(def.id)}
-                  isDefault={bindings[def.id] === def.defaultBinding}
-                />
-                {conflict && recordingId !== def.id && (
-                  <p className="px-1 text-xs text-amber-600 dark:text-amber-500">
-                    {t('shortcuts.conflict', { action: conflict })}
-                  </p>
-                )}
-              </div>
-            );
-          })}
+          {SHORTCUT_DEFINITIONS.map((def) => (
+            <div key={def.id} className="space-y-1">
+              <ShortcutRow
+                labelKey={def.labelKey}
+                descriptionKey={def.descriptionKey}
+                binding={bindings[def.id]}
+                isRecording={recordingId === def.id}
+                onStartRecording={() => startRecording(def.id)}
+                onStopRecording={() => {
+                  setRecordingId((current) => (current === def.id ? null : current));
+                  setRejected((current) => (current?.id === def.id ? null : current));
+                }}
+                onCapture={(binding) => handleCapture(def.id, binding)}
+                onReset={() => resetBinding(def.id)}
+                isDefault={bindings[def.id] === def.defaultBinding}
+              />
+              {rejected?.id === def.id && (
+                <p role="alert" className="px-1 text-xs text-amber-600 dark:text-amber-500">
+                  {t('shortcuts.conflictRejected', { action: labelFor(rejected.conflictWith) })}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
-        <p className="text-xs text-muted-foreground">{t('shortcuts.hint')}</p>
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">{t('shortcuts.hint')}</p>
+          <p className="text-xs text-muted-foreground">{t('shortcuts.reservedNote')}</p>
+        </div>
       </SettingsSection>
     </div>
   );

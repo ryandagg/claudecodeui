@@ -12,6 +12,8 @@ import {
   readClaudePermissions,
   writeClaudePermissions,
   addClaudeAllowRule,
+  readClaudeModel,
+  CLAUDE_DEFAULT_MODEL_VALUE,
 } from '../modules/providers/list/claude/claude-settings.provider.js';
 
 const router = express.Router();
@@ -61,6 +63,29 @@ router.post('/claude-permissions/allow', async (req, res) => {
   } catch (error) {
     console.error('Error adding Claude allow rule:', error);
     res.status(500).json({ error: 'Failed to add Claude allow rule' });
+  }
+});
+
+// ===============================
+// Claude Default Model (single source: ~/.claude/settings.json `model` key)
+// ===============================
+
+// Read the top-level `model` from Claude's own settings file — the same key the
+// terminal `/model` writes. The value needs no translation: the model catalog is
+// built from the SDK's own model list, so it speaks the same vocabulary this file
+// stores. An absent key reports the 'default' sentinel.
+//
+// There is deliberately NO write endpoint. The default model is config owned by
+// ~/.claude/settings.json (set by the terminal `/model`); the app only reads it.
+// A per-chat model choice is session state, held in the client and carried out on
+// each send as options.model — it must never rewrite the shared terminal default.
+router.get('/claude-model', async (req, res) => {
+  try {
+    const model = await readClaudeModel();
+    res.json({ success: true, model: model ?? CLAUDE_DEFAULT_MODEL_VALUE });
+  } catch (error) {
+    console.error('Error reading Claude model:', error);
+    res.status(500).json({ error: 'Failed to read Claude model' });
   }
 });
 

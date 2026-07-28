@@ -17,7 +17,25 @@ import { readProviderSessionActiveModelChange } from '@/shared/utils.js';
 
 export const PROVIDER_MODELS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const PROVIDER_MODELS_CACHE_VERSION = 1;
-const UNCACHED_PROVIDERS = new Set<LLMProvider>(['claude']);
+
+/**
+ * Providers whose catalog is worth re-checking sooner than the shared TTL.
+ *
+ * Claude's list is discovered by spawning the SDK (~1s), and it is read on every
+ * page load and before every message send for effort validation — far too often
+ * to pay that spawn each time. It also reflects what the active profile is
+ * actually entitled to run, so a three-day snapshot could hide a model that
+ * `~/.claude/settings.json` now names, leaving the dropdown unable to match the
+ * stored value. A short TTL settles both: the spawn amortizes across a working
+ * session, and a profile change surfaces on its own without the user having to
+ * reach for hard refresh (which still bypasses the cache on demand).
+ */
+const PROVIDER_MODELS_CACHE_TTL_OVERRIDES_MS: Partial<Record<LLMProvider, number>> = {
+  claude: 10 * 60 * 1000,
+};
+
+const resolveCacheTtlMs = (provider: LLMProvider): number =>
+  PROVIDER_MODELS_CACHE_TTL_OVERRIDES_MS[provider] ?? PROVIDER_MODELS_CACHE_TTL_MS;
 
 type ProviderModelsServiceDependencies = {
   resolveProvider?: (provider: LLMProvider) => Pick<IProvider, 'models'>;
@@ -205,7 +223,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     const currentTime = now();
     const entry: ProviderModelsCacheEntry = {
       updatedAt: currentTime,
-      expiresAt: currentTime + PROVIDER_MODELS_CACHE_TTL_MS,
+      expiresAt: currentTime + resolveCacheTtlMs(provider),
       models,
     };
 
@@ -233,42 +251,10 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     return request;
   };
 
-  const loadDirectModels = (
-    provider: LLMProvider,
-  ): Promise<ProviderModelsResult> => {
-    const request = resolveProvider(provider).models.getSupportedModels()
-      .then((models) => {
-        const currentTime = now();
-        return {
-          models,
-          cache: {
-            updatedAt: new Date(currentTime).toISOString(),
-            expiresAt: new Date(currentTime).toISOString(),
-            source: 'fresh' as const,
-          },
-        };
-      })
-      .finally(() => {
-        pendingRequests.delete(provider);
-      });
-
-    pendingRequests.set(provider, request);
-    return request;
-  };
-
   const getProviderModels = async (
     provider: LLMProvider,
     options: ProviderModelsOptions = {},
   ): Promise<ProviderModelsResult> => {
-    if (UNCACHED_PROVIDERS.has(provider)) {
-      const pendingRequest = pendingRequests.get(provider);
-      if (pendingRequest) {
-        return pendingRequest;
-      }
-
-      return loadDirectModels(provider);
-    }
-
     if (options.bypassCache) {
       const pendingRequest = pendingRequests.get(provider);
       if (pendingRequest) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useSettings } from '../../../contexts/SettingsContext';
-import { authenticatedFetch } from '../../../utils/api';
+import { api, authenticatedFetch } from '../../../utils/api';
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type {
   ProjectSession,
@@ -20,7 +20,10 @@ import {
 const PROVIDERS: LLMProvider[] = ['claude', 'cursor', 'codex', 'gemini', 'opencode'];
 
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
-  claude: 'opus',
+  // Claude's default is owned by ~/.claude/settings.json, hydrated on mount from
+  // /api/settings/claude-model. 'default' is the "defer to settings.json / SDK"
+  // sentinel used until that hydration resolves.
+  claude: 'default',
   cursor: 'gpt-5.3-codex',
   codex: 'gpt-5.4',
   gemini: 'gemini-3.1-pro-preview',
@@ -94,9 +97,11 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const [cursorModel, setCursorModel] = useState<string>(() => {
     return localStorage.getItem('cursor-model') || FALLBACK_DEFAULT_MODEL.cursor;
   });
-  const [claudeModel, setClaudeModel] = useState<string>(() => {
-    return getSetting('claude-model') || FALLBACK_DEFAULT_MODEL.claude;
-  });
+  // Claude's default model is owned by ~/.claude/settings.json (shared with the
+  // terminal), not app storage. Seed with the sentinel and hydrate from the server
+  // on mount; the reconcile effect below adopts the settings.json value once the
+  // catalog loads.
+  const [claudeModel, setClaudeModel] = useState<string>(FALLBACK_DEFAULT_MODEL.claude);
   const [codexModel, setCodexModel] = useState<string>(() => {
     return localStorage.getItem('codex-model') || FALLBACK_DEFAULT_MODEL.codex;
   });
@@ -152,8 +157,15 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
   const setStoredProviderModel = useCallback((targetProvider: LLMProvider, model: string) => {
     if (targetProvider === 'claude') {
+      // Claude's default model is owned by ~/.claude/settings.json (shared with the
+      // terminal), and the app is a READER of it, never a writer. Persisting a pick
+      // here would rewrite the user's terminal-wide default from inside a single
+      // chat — the exact clobber this store was flipped to avoid. Local state is
+      // enough: every send carries claudeModel as options.model, so the choice
+      // takes effect for this session without touching the shared file. It resets
+      // to the settings.json value on the next reload, which is the intended
+      // behavior for a session-scoped choice.
       setClaudeModel(model);
-      setSetting('claude-model', model);
       return;
     }
 
@@ -177,7 +189,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
     setOpenCodeModel(model);
     localStorage.setItem('opencode-model', model);
-  }, [setSetting]);
+  }, []);
 
   const loadProviderModels = useCallback(async (options: { bypassCache?: boolean } = {}) => {
     const providers: LLMProvider[] = ['claude', 'cursor', 'codex', 'gemini', 'opencode'];
@@ -402,24 +414,34 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     return def.DEFAULT;
   };
 
+  // Hydrate the Claude default model from ~/.claude/settings.json once the catalog
+  // is available. Catalog values are the SDK's own model IDs — the same vocabulary
+  // settings.json stores — so the stored value should match an option outright; the
+  // guard only covers a model the current profile no longer offers. Unlike the other
+  // providers there is no local re-persist here, and the app never writes back to
+  // settings.json at all: that file is owned by the terminal `/model`, and this
+  // effect only reads it. A per-chat pick lives in local state (see
+  // setStoredProviderModel) and never touches the shared file.
   useEffect(() => {
     const claude = providerModelCatalog.claude;
-    if (claude) {
-      const stored = getSetting('claude-model');
-      const next = stored && claude.OPTIONS.some((o) => o.value === stored)
-        ? stored
-        : claudeModel && claude.OPTIONS.some((o) => o.value === claudeModel)
-          ? claudeModel
+    if (!claude) return;
+
+    let cancelled = false;
+    api.settings.getClaudeModel()
+      .then((response) => response.json())
+      .then((body: { success?: boolean; model?: string }) => {
+        if (cancelled || !body?.success) return;
+        const next = body.model && claude.OPTIONS.some((o) => o.value === body.model)
+          ? body.model
           : claude.DEFAULT;
-      if (next !== claudeModel) {
-        setClaudeModel(next);
-      }
-      if (getSetting('claude-model') !== next) {
-        setSetting('claude-model', next);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerModelCatalog.claude, claudeModel]);
+        setClaudeModel((previous) => (previous === next ? previous : next));
+      })
+      .catch(() => {
+        // Leave the sentinel in place; a failed read shouldn't clobber a valid choice.
+      });
+
+    return () => { cancelled = true; };
+  }, [providerModelCatalog.claude]);
 
   useEffect(() => {
     const cursor = providerModelCatalog.cursor;

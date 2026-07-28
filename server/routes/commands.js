@@ -43,7 +43,11 @@ const hasConcreteSessionId = (value) =>
   typeof value === "string" && value.trim().length > 0;
 
 const resolveCommandModel = async (provider, catalog, sessionId) => {
-  if (!hasConcreteSessionId(sessionId)) {
+  // For most providers the default (no-session) model is just the catalog default,
+  // so we skip the getCurrentActiveModel round trip. Claude is the exception: its
+  // default lives in ~/.claude/settings.json, which getCurrentActiveModel reads —
+  // so claude must call through even without a session.
+  if (!hasConcreteSessionId(sessionId) && provider !== 'claude') {
     return catalog.DEFAULT;
   }
 
@@ -178,6 +182,16 @@ const builtInCommands = [
     metadata: { type: "builtin" },
   },
   {
+    // Alias of /models. The terminal's `/model` sets a session-only model that the
+    // SDK forgets on the next resume (this app spawns a fresh query per message),
+    // so forwarding it raw would silently evaporate. Routing it to the in-app
+    // picker instead persists the choice through the app-owned per-session store.
+    name: "/model",
+    description: "Choose the model for this session",
+    namespace: "builtin",
+    metadata: { type: "builtin" },
+  },
+  {
     name: "/cost",
     description: "Display token usage information",
     namespace: "builtin",
@@ -256,6 +270,10 @@ Custom commands can be created in:
   },
 
   "/models": executeModelsCommand,
+
+  // `/model` is an alias for `/models`: both open the in-app model picker. See the
+  // builtInCommands entry for why the singular can't be forwarded to the SDK.
+  "/model": executeModelsCommand,
 
   "/cost": async (args, context) => {
     const tokenUsage = context?.tokenUsage || {};

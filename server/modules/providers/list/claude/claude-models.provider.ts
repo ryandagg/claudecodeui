@@ -1,6 +1,12 @@
 import { readFile } from 'node:fs/promises';
 
+import { query, type ModelInfo } from '@anthropic-ai/claude-agent-sdk';
+
 import { sessionsDb } from '@/modules/database/index.js';
+import {
+  CLAUDE_DEFAULT_MODEL_VALUE,
+  readClaudeModel,
+} from '@/modules/providers/list/claude/claude-settings.provider.js';
 import type { IProviderModels } from '@/shared/interfaces.js';
 import type {
   ProviderChangeActiveModelInput,
@@ -14,12 +20,27 @@ import {
   writeProviderSessionActiveModelChange,
 } from '@/shared/utils.js';
 
+/**
+ * Effort preselected for models that support it. The SDK reports which levels a
+ * model allows but not which to start on, so the app keeps its existing choice.
+ */
+const CLAUDE_DEFAULT_EFFORT = 'high';
+
+/**
+ * Last-resort catalog for when the SDK cannot be asked what it supports.
+ *
+ * These are floating aliases: Claude resolves `opus` to whatever the current Opus
+ * is, so the labels deliberately carry no version number — a hardcoded "4.8" here
+ * would silently become a lie on the next model release. The live catalog from
+ * `getSupportedModels()` reports concrete versions because it reads them from the
+ * SDK at call time.
+ */
 export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
   OPTIONS: [
     {
       value: 'default',
       label: 'Default (recommended)',
-      description: 'Use the default model (currently Opus 4.8 (1M context)) · $5/$25 per Mtok',
+      description: 'Use whichever model your Claude settings select',
       effort: {
         default: 'high',
         values: [
@@ -33,7 +54,7 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
     {
       value: 'fable',
       label: 'Fable',
-      description: 'Fable 5 · Most capable for your hardest and longest-running tasks · Uses your limits ~2× faster than Opus',
+      description: 'Most capable for the hardest and longest-running tasks',
       effort: {
         default: 'high',
         values: [
@@ -46,9 +67,9 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       },
     },
     {
-      value: "sonnet",
-      label: "Sonnet",
-      description: "Sonnet 4.6 · Best for everyday tasks · $3/$15 per Mtok",
+      value: 'sonnet',
+      label: 'Sonnet',
+      description: 'Best for everyday tasks',
       effort: {
         default: 'high',
         values: [
@@ -62,7 +83,7 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
     {
       value: 'sonnet[1m]',
       label: 'Sonnet (1M context)',
-      description: 'Sonnet 4.6 for long sessions · $3/$15 per Mtok',
+      description: 'Sonnet for long sessions',
       effort: {
         default: 'high',
         values: [
@@ -74,9 +95,9 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       },
     },
     {
-      value: 'opus[1m]',
-      label: 'Opus 4.8 (1M context)',
-      description: 'Opus 4.8 with 1M context · Most capable for complex work · $5/$25 per Mtok',
+      value: 'opus',
+      label: 'Opus',
+      description: 'Most capable for complex work',
       effort: {
         default: 'high',
         values: [
@@ -89,9 +110,9 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       },
     },
     {
-      value: 'opus',
-      label: 'Opus 4.6',
-      description: 'Opus 4.6 · Fast mode for Opus · $5/$25 per Mtok',
+      value: 'opus[1m]',
+      label: 'Opus (1M context)',
+      description: 'Opus for long sessions',
       effort: {
         default: 'high',
         values: [
@@ -106,7 +127,7 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
     {
       value: 'haiku',
       label: 'Haiku',
-      description: 'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',
+      description: 'Fastest for quick answers',
     },
   ],
   DEFAULT: 'default',
@@ -117,6 +138,51 @@ export const findClaudeModelOption = (model: string | undefined | null): Provide
   if (!normalizedModel) return null;
   return CLAUDE_FALLBACK_MODELS.OPTIONS.find((option) => option.value === normalizedModel) ?? null;
 };
+
+/**
+ * Maps the SDK's own model list into the app's provider catalog shape.
+ *
+ * `ModelInfo.value` is the identifier Claude itself uses in API calls, which is
+ * exactly what `~/.claude/settings.json` stores for `model`. Keeping it verbatim
+ * makes the catalog and the settings file speak one vocabulary: the dropdown can
+ * match the stored value exactly, and writing a selection back is an identity
+ * round-trip rather than a lossy alias translation.
+ *
+ * Labels, descriptions, and effort levels also come from the SDK, so the list
+ * reflects what the active profile (Bedrock gateway included) actually offers
+ * instead of a hand-maintained snapshot that silently drifts.
+ */
+const buildClaudeModelsDefinition = (models: ModelInfo[]): ProviderModelsDefinition => {
+  const options: ProviderModelOption[] = models.map((model) => {
+    const efforts = model.supportsEffort ? model.supportedEffortLevels ?? [] : [];
+    return {
+      value: model.value,
+      label: model.displayName || model.value,
+      ...(model.description ? { description: model.description } : {}),
+      ...(efforts.length > 0
+        ? {
+          effort: {
+            default: CLAUDE_DEFAULT_EFFORT,
+            values: efforts.map((value) => ({ value })),
+          },
+        }
+        : {}),
+    };
+  });
+
+  if (options.length === 0) {
+    return CLAUDE_FALLBACK_MODELS;
+  }
+
+  // The SDK advertises its own 'default' sentinel; prefer it so "let Claude
+  // decide" survives, and fall back to the first entry if it ever disappears.
+  const hasDefaultSentinel = options.some((option) => option.value === CLAUDE_DEFAULT_MODEL_VALUE);
+  return {
+    OPTIONS: options,
+    DEFAULT: hasDefaultSentinel ? CLAUDE_DEFAULT_MODEL_VALUE : options[0].value,
+  };
+};
+
 type ClaudeInitEvent = {
   sessionId?: string;
   session_id?: string;
@@ -227,24 +293,51 @@ const readClaudeSessionModelFromJsonl = async (
 };
 
 export class ClaudeProviderModels implements IProviderModels {
+  /**
+   * Asks the SDK which models the current profile can actually run.
+   *
+   * `persistSession: false` is what makes this viable: the query would otherwise
+   * write a session JSONL and register the invoking directory as a bogus
+   * workspace, which is why this lookup used to be hardcoded instead.
+   *
+   * The hardcoded list stays as a fallback for when the SDK cannot be reached.
+   */
   async getSupportedModels(): Promise<ProviderModelsDefinition> {
-    // claude creates a new jsonl file as a separate session for this request.
-    // As a result, it lists the workspace where this is invoked when it shouldn't.
-    //
-    // Disabled for now:
-    // const queryInstance = query({
-    //   prompt: 'Get supported models',
-    //   options: buildClaudeQueryOptions(),
-    // });
-    // const supportedModels = await queryInstance.supportedModels();
-    // queryInstance.close();
-    // return buildClaudeModelsDefinition(supportedModels);
-    return CLAUDE_FALLBACK_MODELS;
+    let queryInstance: ReturnType<typeof query> | null = null;
+    try {
+      queryInstance = query({
+        prompt: 'Get supported models',
+        options: {
+          settingSources: ['user'],
+          persistSession: false,
+        },
+      });
+
+      return buildClaudeModelsDefinition(await queryInstance.supportedModels());
+    } catch (error) {
+      console.warn('[Claude models] Unable to read supported models from the SDK:', error);
+      return CLAUDE_FALLBACK_MODELS;
+    } finally {
+      try {
+        queryInstance?.close();
+      } catch {
+        // A close failure on a throwaway query is not worth surfacing.
+      }
+    }
   }
 
   async getCurrentActiveModel(sessionId?: string): Promise<ProviderCurrentActiveModel> {
     if (!sessionId?.trim()) {
-      return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
+      // The default model is owned by ~/.claude/settings.json (the single source,
+      // shared with the terminal). Catalog values are the SDK's own model IDs —
+      // the same vocabulary that file uses — so the stored value passes straight
+      // through and the UI can match it exactly.
+      try {
+        const stored = await readClaudeModel();
+        return { model: stored ?? CLAUDE_DEFAULT_MODEL_VALUE };
+      } catch {
+        return buildDefaultProviderCurrentActiveModel(await this.getSupportedModels());
+      }
     }
 
     try {

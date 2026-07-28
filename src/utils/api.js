@@ -287,6 +287,11 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ settings }),
       }),
+    // Claude default model lives in ~/.claude/settings.json (the single source,
+    // shared with the terminal), not the DB. Read-only: the app never writes this
+    // key — the terminal `/model` owns the default, and a per-chat choice is
+    // session state that rides out on each send, not a write back to the file.
+    getClaudeModel: () => authenticatedFetch('/api/settings/claude-model'),
   },
 
   // Generic GET method for any endpoint

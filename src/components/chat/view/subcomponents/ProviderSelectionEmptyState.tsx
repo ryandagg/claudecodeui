@@ -151,8 +151,12 @@ export default function ProviderSelectionEmptyState({
   const setModelForProvider = useCallback(
     (providerId: LLMProvider, modelValue: string) => {
       if (providerId === "claude") {
+        // Claude's default model is owned by ~/.claude/settings.json (shared with
+        // the terminal); the app reads it but never writes it. Picking a model to
+        // start a chat is a session-scoped choice, so it lives in local state only
+        // and rides out on options.model — writing it back would rewrite the user's
+        // terminal-wide default. Only the terminal `/model` sets that default.
         setClaudeModel(modelValue);
-        setSetting("claude-model", modelValue);
       } else if (providerId === "codex") {
         setCodexModel(modelValue);
         localStorage.setItem("codex-model", modelValue);
@@ -167,7 +171,7 @@ export default function ProviderSelectionEmptyState({
         localStorage.setItem("cursor-model", modelValue);
       }
     },
-    [setClaudeModel, setCursorModel, setCodexModel, setGeminiModel, setOpenCodeModel, setSetting],
+    [setClaudeModel, setCursorModel, setCodexModel, setGeminiModel, setOpenCodeModel],
   );
 
   const handleModelSelect = useCallback(

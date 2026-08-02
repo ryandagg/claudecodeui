@@ -1301,9 +1301,11 @@ export async function findFilesRecursivelyCreatedAfter(
 /**
  * Reads file creation/update timestamps and maps them to DB-friendly ISO strings.
  *
- * Session indexers use this to persist `created_at` and `updated_at` metadata
- * when upserting sessions. If the file cannot be read, an empty object is
- * returned so indexing can continue for other files.
+ * Prefer {@link readSessionActivityTimestamps} for session transcripts: file
+ * mtime tracks when the file was last *written*, not when the conversation was
+ * last active. This remains the fallback for transcripts that carry no usable
+ * message timestamps. If the file cannot be read, an empty object is returned
+ * so indexing can continue for other files.
  */
 export async function readFileTimestamps(
   filePath: string
@@ -1317,6 +1319,87 @@ export async function readFileTimestamps(
   } catch {
     return {};
   }
+}
+
+/**
+ * Reads the first and last message timestamps out of a session transcript.
+ *
+ * Session recency must come from conversation content, not filesystem
+ * metadata. Resuming a session, re-indexing, or copying the transcript all
+ * bump mtime without adding a message, which would float a stale conversation
+ * to the top of the sidebar.
+ *
+ * Lines are scanned in order and the newest timestamp wins rather than simply
+ * taking the last line, since transcripts may interleave out of order. Returns
+ * an empty object when nothing parseable is found, so callers can fall back to
+ * {@link readFileTimestamps}.
+ */
+export async function readSessionActivityTimestamps(
+  filePath: string
+): Promise<{ createdAt?: string; updatedAt?: string }> {
+  let earliestTime = Number.POSITIVE_INFINITY;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  try {
+    const fileStream = fs.createReadStream(filePath);
+    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of lineReader) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let timestampValue: unknown;
+      try {
+        timestampValue = (JSON.parse(trimmed) as Record<string, unknown>).timestamp;
+      } catch {
+        // Partially written or malformed lines are expected while a session streams.
+        continue;
+      }
+
+      if (typeof timestampValue !== 'string') {
+        continue;
+      }
+
+      const parsedTime = new Date(timestampValue).getTime();
+      if (Number.isNaN(parsedTime)) {
+        continue;
+      }
+
+      earliestTime = Math.min(earliestTime, parsedTime);
+      latestTime = Math.max(latestTime, parsedTime);
+    }
+  } catch {
+    return {};
+  }
+
+  if (!Number.isFinite(earliestTime) || !Number.isFinite(latestTime)) {
+    return {};
+  }
+
+  return {
+    createdAt: new Date(earliestTime).toISOString(),
+    updatedAt: new Date(latestTime).toISOString(),
+  };
+}
+
+/**
+ * Session timestamps sourced from conversation content where possible, falling
+ * back to filesystem metadata per-field for transcripts that lack timestamps.
+ */
+export async function readSessionTimestamps(
+  filePath: string
+): Promise<{ createdAt?: string; updatedAt?: string }> {
+  const [activityTimestamps, fileTimestamps] = await Promise.all([
+    readSessionActivityTimestamps(filePath),
+    readFileTimestamps(filePath),
+  ]);
+
+  return {
+    createdAt: activityTimestamps.createdAt ?? fileTimestamps.createdAt,
+    updatedAt: activityTimestamps.updatedAt ?? fileTimestamps.updatedAt,
+  };
 }
 
 // ---------------------------

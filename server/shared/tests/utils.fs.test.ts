@@ -11,6 +11,8 @@ import {
   findProviderSkillMarkdownFiles,
   findTopmostGitRoot,
   readFileTimestamps,
+  readSessionActivityTimestamps,
+  readSessionTimestamps,
   readJsonConfig,
   readProviderSessionActiveModelChange,
   readProviderSkillMarkdownDefinition,
@@ -317,6 +319,121 @@ test('readFileTimestamps returns {} for a missing file', async () => {
   const dir = await makeTempDir('timestamps-missing');
   try {
     assert.deepEqual(await readFileTimestamps(path.join(dir, 'nope.txt')), {});
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// readSessionActivityTimestamps / readSessionTimestamps
+// ---------------------------------------------------------------------------
+const writeTranscript = async (dir: string, lines: unknown[]): Promise<string> => {
+  const filePath = path.join(dir, 'session.jsonl');
+  await fs.writeFile(filePath, lines.map((line) => JSON.stringify(line)).join('\n'), 'utf8');
+  return filePath;
+};
+
+test('readSessionActivityTimestamps reports the message time span', async () => {
+  const dir = await makeTempDir('session-activity');
+  try {
+    const filePath = await writeTranscript(dir, [
+      { timestamp: '2026-08-01T20:51:58.385Z' },
+      { timestamp: '2026-08-01T20:52:01.684Z' },
+    ]);
+
+    assert.deepEqual(await readSessionActivityTimestamps(filePath), {
+      createdAt: '2026-08-01T20:51:58.385Z',
+      updatedAt: '2026-08-01T20:52:01.684Z',
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionActivityTimestamps takes the newest time, not the last line', async () => {
+  const dir = await makeTempDir('session-activity-order');
+  try {
+    const filePath = await writeTranscript(dir, [
+      { timestamp: '2026-08-01T10:00:00.000Z' },
+      { timestamp: '2026-08-01T12:00:00.000Z' },
+      { timestamp: '2026-08-01T11:00:00.000Z' },
+    ]);
+
+    const stamps = await readSessionActivityTimestamps(filePath);
+    assert.equal(stamps.createdAt, '2026-08-01T10:00:00.000Z');
+    assert.equal(stamps.updatedAt, '2026-08-01T12:00:00.000Z');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionActivityTimestamps skips malformed lines and unusable timestamps', async () => {
+  const dir = await makeTempDir('session-activity-malformed');
+  try {
+    const filePath = path.join(dir, 'session.jsonl');
+    await fs.writeFile(
+      filePath,
+      [
+        '{ not json',
+        JSON.stringify({ timestamp: 'not-a-date' }),
+        JSON.stringify({ timestamp: 42 }),
+        JSON.stringify({ noTimestamp: true }),
+        '',
+        JSON.stringify({ timestamp: '2026-08-01T09:00:00.000Z' }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    assert.deepEqual(await readSessionActivityTimestamps(filePath), {
+      createdAt: '2026-08-01T09:00:00.000Z',
+      updatedAt: '2026-08-01T09:00:00.000Z',
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionActivityTimestamps returns {} when nothing is parseable', async () => {
+  const dir = await makeTempDir('session-activity-empty');
+  try {
+    const filePath = await writeTranscript(dir, [{ noTimestamp: true }]);
+    assert.deepEqual(await readSessionActivityTimestamps(filePath), {});
+    assert.deepEqual(await readSessionActivityTimestamps(path.join(dir, 'missing.jsonl')), {});
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTimestamps ignores mtime when the transcript has message times', async () => {
+  const dir = await makeTempDir('session-timestamps');
+  try {
+    const filePath = await writeTranscript(dir, [
+      { timestamp: '2026-08-01T20:51:58.385Z' },
+      { timestamp: '2026-08-01T20:52:01.684Z' },
+    ]);
+
+    // Touching the file must not make a day-old conversation look current —
+    // this is the regression that reordered the sidebar.
+    const future = new Date('2026-08-02T17:18:01.072Z');
+    await fs.utimes(filePath, future, future);
+
+    const stamps = await readSessionTimestamps(filePath);
+    assert.equal(stamps.updatedAt, '2026-08-01T20:52:01.684Z');
+    assert.equal(stamps.createdAt, '2026-08-01T20:51:58.385Z');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTimestamps falls back to file metadata without message times', async () => {
+  const dir = await makeTempDir('session-timestamps-fallback');
+  try {
+    const filePath = await writeTranscript(dir, [{ noTimestamp: true }]);
+    const stamps = await readSessionTimestamps(filePath);
+    const fileStamps = await readFileTimestamps(filePath);
+
+    assert.equal(stamps.updatedAt, fileStamps.updatedAt);
+    assert.equal(stamps.createdAt, fileStamps.createdAt);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

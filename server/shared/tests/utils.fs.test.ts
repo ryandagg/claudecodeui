@@ -421,6 +421,36 @@ test('validateWorkspacePath rejects system-critical directories', async () => {
   assert.match(etc.error ?? '', /system/i);
 });
 
+test('validateWorkspacePath never resolves a Windows path under process.cwd()', async () => {
+  // Regression: path.resolve() is platform-bound, so on POSIX an absolute
+  // Windows path degraded into a relative one and got appended to the cwd —
+  // which then had a directory created at it, named with literal backslashes.
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  for (const windowsPath of [
+    '\\\\wsl$\\Ubuntu\\home\\me\\project',
+    '\\\\some-server\\share\\project',
+    'C:\\Users\\me\\project',
+  ]) {
+    const result = await validateWorkspacePath(windowsPath);
+    if (result.valid) {
+      assert.ok(
+        !result.resolvedPath?.startsWith(process.cwd()),
+        `${windowsPath} resolved under the cwd: ${result.resolvedPath}`,
+      );
+      assert.ok(!result.resolvedPath?.includes('\\'), `${windowsPath} kept backslashes`);
+    }
+  }
+});
+
+test('validateWorkspacePath rejects a bare relative path instead of resolving it', async () => {
+  const result = await validateWorkspacePath('some-relative-dir');
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /absolute/i);
+});
+
 test('validateWorkspacePath accepts a real path within the workspace root', async () => {
   // WORKSPACES_ROOT defaults to the home directory; a temp dir under it validates.
   const home = os.homedir();

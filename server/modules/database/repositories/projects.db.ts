@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 
 import { getConnection } from '@/modules/database/connection.js';
 import type { CreateProjectPathResult, ProjectRepositoryRow } from '@/shared/types.js';
-import { normalizeProjectPath } from '@/shared/utils.js';
+import { getPathBasename, normalizeProjectPath } from '@/shared/utils.js';
 
 function normalizeProjectDisplayName(projectPath: string, customProjectName: string | null): string {
     const trimmedCustomName = typeof customProjectName === 'string' ? customProjectName.trim() : '';
@@ -11,7 +10,7 @@ function normalizeProjectDisplayName(projectPath: string, customProjectName: str
         return trimmedCustomName;
     }
 
-    const directoryName = path.basename(projectPath);
+    const directoryName = getPathBasename(projectPath);
     return directoryName || projectPath;
 }
 

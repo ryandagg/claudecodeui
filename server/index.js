@@ -12,7 +12,16 @@ import cors from 'cors';
 import mime from 'mime-types';
 import Database from 'better-sqlite3';
 
-import { AppError, WORKSPACES_ROOT, getOpenCodeDatabasePath, validateWorkspacePath } from '@/shared/utils.js';
+import {
+    AppError,
+    WORKSPACES_ROOT,
+    getOpenCodeDatabasePath,
+    isRunningUnderWsl,
+    normalizeProjectPath,
+    toWindowsUncPathForWsl,
+    translateWindowsPathForPosix,
+    validateWorkspacePath,
+} from '@/shared/utils.js';
 import { closeSessionsWatcher, initializeSessionsWatcher } from '@/modules/providers/index.js';
 import { createWebSocketServer } from '@/modules/websocket/index.js';
 
@@ -374,43 +383,127 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
     }
 });
 
-// Opens the OS-native folder picker (macOS Finder) on the machine running the
-// server and returns the chosen absolute path. The browser cannot expose an
-// absolute filesystem path itself, so the local server drives the native dialog.
-app.post('/api/choose-directory', authenticateToken, async (req, res) => {
-    if (process.platform !== 'darwin') {
-        return res.status(501).json({
-            error: 'The native folder picker is only available on macOS. Type or paste a path instead.',
-        });
-    }
+// AppleScript: open "choose folder" starting at the workspace root and print
+// the selection as a POSIX path. Cancelling raises error -128.
+const MAC_FOLDER_PICKER_SCRIPT = [
+    'on run argv',
+    '  set defaultLoc to POSIX file (item 1 of argv)',
+    '  set chosenFolder to choose folder with prompt "Select project folder" default location defaultLoc',
+    '  return POSIX path of chosenFolder',
+    'end run',
+].flatMap((line) => ['-e', line]);
 
-    // AppleScript: open "choose folder" starting at the workspace root and print
-    // the selection as a POSIX path. Cancelling raises error -128.
-    const script = [
-        'on run argv',
-        '  set defaultLoc to POSIX file (item 1 of argv)',
-        '  set chosenFolder to choose folder with prompt "Select project folder" default location defaultLoc',
-        '  return POSIX path of chosenFolder',
-        'end run',
-    ].flatMap((line) => ['-e', line]);
+// WinForms folder dialog. Exit code 2 signals a Cancel, mirroring the -128
+// convention AppleScript uses above.
+//
+// The starting directory is embedded as a single-quoted PowerShell literal
+// rather than passed through the environment: WSL does not forward environment
+// variables to Windows processes unless they are listed in WSLENV, so an
+// env-based hand-off silently arrives empty under interop.
+const buildWindowsFolderPickerScript = (initialPath) => {
+    // Single-quoted PowerShell strings are literal; doubling ' is the only escape.
+    const quotedInitialPath = `'${String(initialPath ?? '').replace(/'/g, "''")}'`;
 
-    execFile('osascript', [...script, WORKSPACES_ROOT], (error, stdout, stderr) => {
+    return [
+        'Add-Type -AssemblyName System.Windows.Forms',
+        '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+        "$dialog.Description = 'Select project folder'",
+        '$dialog.ShowNewFolderButton = $true',
+        `$initialPath = ${quotedInitialPath}`,
+        'if ($initialPath) { $dialog.SelectedPath = $initialPath }',
+        // An explicit top-most owner keeps the dialog from opening behind the browser.
+        '$owner = New-Object System.Windows.Forms.Form',
+        '$owner.TopMost = $true',
+        'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) } else { exit 2 }',
+    ].join('; ');
+};
+
+const openMacFolderPicker = () => new Promise((resolve) => {
+    execFile('osascript', [...MAC_FOLDER_PICKER_SCRIPT, WORKSPACES_ROOT], (error, stdout, stderr) => {
         if (error) {
             // -128 is the standard "user canceled" code from a Cancel/⌘-. dismissal.
             if (/-128|user canceled/i.test(stderr || error.message || '')) {
-                return res.json({ canceled: true });
+                return resolve({ canceled: true });
             }
-            console.error('Error opening native folder picker:', stderr || error.message);
-            return res.status(500).json({ error: 'Failed to open the folder picker' });
+            return resolve({ failure: stderr || error.message });
         }
 
-        const chosenPath = stdout.trim().replace(/\/$/, '');
-        if (!chosenPath) {
-            return res.json({ canceled: true });
-        }
-
-        res.json({ path: chosenPath });
+        resolve({ path: stdout.trim().replace(/\/$/, '') });
     });
+});
+
+// Drives the Windows folder dialog, either natively or from inside WSL via
+// interop. WSL gets a Windows path back, so it is translated to this
+// filesystem before it reaches the client.
+const openWindowsFolderPicker = () => new Promise((resolve) => {
+    const runningUnderWsl = process.platform !== 'win32';
+    const initialPath = runningUnderWsl
+        ? toWindowsUncPathForWsl(WORKSPACES_ROOT)
+        : WORKSPACES_ROOT;
+
+    execFile(
+        'powershell.exe',
+        ['-NoProfile', '-STA', '-Command', buildWindowsFolderPickerScript(initialPath)],
+        (error, stdout, stderr) => {
+            if (error) {
+                if (error.code === 2) {
+                    return resolve({ canceled: true });
+                }
+
+                if (error.code === 'ENOENT') {
+                    return resolve({
+                        failure: 'powershell.exe was not found. On WSL this usually means Windows interop is disabled.',
+                    });
+                }
+
+                return resolve({ failure: stderr || error.message });
+            }
+
+            const chosenPath = stdout.trim();
+            if (!chosenPath) {
+                return resolve({ canceled: true });
+            }
+
+            if (!runningUnderWsl) {
+                return resolve({ path: chosenPath });
+            }
+
+            const translation = translateWindowsPathForPosix(normalizeProjectPath(chosenPath));
+            if (!translation.path) {
+                return resolve({ failure: translation.error ?? 'The selected folder is not reachable from WSL' });
+            }
+
+            resolve({ path: translation.path });
+        },
+    );
+});
+
+// Opens the OS-native folder picker on the machine running the server and
+// returns the chosen absolute path. The browser cannot expose an absolute
+// filesystem path itself, so the local server drives the native dialog.
+app.post('/api/choose-directory', authenticateToken, async (req, res) => {
+    const supportsWindowsPicker = process.platform === 'win32' || isRunningUnderWsl();
+
+    if (process.platform !== 'darwin' && !supportsWindowsPicker) {
+        return res.status(501).json({
+            error: 'The native folder picker is only available on macOS and Windows. Type or paste a path instead.',
+        });
+    }
+
+    const result = process.platform === 'darwin'
+        ? await openMacFolderPicker()
+        : await openWindowsFolderPicker();
+
+    if (result.failure) {
+        console.error('Error opening native folder picker:', result.failure);
+        return res.status(500).json({ error: 'Failed to open the folder picker' });
+    }
+
+    if (result.canceled || !result.path) {
+        return res.json({ canceled: true });
+    }
+
+    res.json({ path: result.path });
 });
 
 // Read file content endpoint

@@ -9,6 +9,7 @@ import {
   findFilesRecursivelyCreatedAfter,
   normalizeSessionName,
   readSessionTimestamps,
+  readSessionTitle,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
 
@@ -145,10 +146,10 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       };
     }
 
-    let sessionName = nameMap.get(parsed.sessionId);
-    if (!sessionName) {
-      sessionName = await this.extractSessionAiTitleFromEnd(filePath, parsed.sessionId);
-    }
+    // The transcript wins: it carries the user's own /rename. history.jsonl's
+    // `display` is only the first prompt, so it is the last resort rather than
+    // the first choice it used to be.
+    const sessionName = (await readSessionTitle(filePath)) ?? nameMap.get(parsed.sessionId);
 
     return {
       ...parsed,

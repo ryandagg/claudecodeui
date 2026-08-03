@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import {
   access,
+  appendFile,
   lstat,
   mkdir,
   readFile,
@@ -1382,6 +1383,100 @@ export async function readSessionActivityTimestamps(
     createdAt: new Date(earliestTime).toISOString(),
     updatedAt: new Date(latestTime).toISOString(),
   };
+}
+
+/**
+ * Titles a Claude transcript carries, in order of authority.
+ *
+ * `custom-title` is written by the user's `/rename`, so it outranks anything
+ * generated. `ai-title` is a model-written summary. `last-prompt` is raw prompt
+ * text and only stands in when nothing better exists.
+ */
+const SESSION_TITLE_PRECEDENCE = ['customTitle', 'aiTitle', 'lastPrompt'] as const;
+
+/**
+ * Reads the best available title out of a session transcript.
+ *
+ * Scans the whole file and applies precedence by *meaning*, not by file
+ * position — a later `ai-title` must not override an explicit `/rename`.
+ * Later lines of the same rank do win, since a second `/rename` supersedes
+ * the first.
+ */
+export async function readSessionTitle(filePath: string): Promise<string | null> {
+  const titlesByRank = new Map<string, string>();
+
+  try {
+    const fileStream = fs.createReadStream(filePath);
+    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of lineReader) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      for (const field of SESSION_TITLE_PRECEDENCE) {
+        const value = data[field];
+        if (typeof value === 'string' && value.trim()) {
+          titlesByRank.set(field, value.trim());
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  for (const field of SESSION_TITLE_PRECEDENCE) {
+    const title = titlesByRank.get(field);
+    if (title) {
+      return title;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Records a rename into the transcript itself, as Claude's `/rename` does.
+ *
+ * Writing here rather than only into the app database makes a rename portable:
+ * it shows up in `claude --resume`, survives a database rebuild, and is
+ * re-derived like any other transcript fact. Appending is safe alongside a
+ * running session because the format is append-only JSONL and this adds one
+ * complete line.
+ *
+ * Note this changes the file's mtime — harmless only because session recency
+ * now comes from message timestamps rather than file metadata.
+ */
+export async function appendSessionCustomTitle(
+  filePath: string,
+  sessionId: string,
+  customTitle: string
+): Promise<boolean> {
+  const trimmedTitle = customTitle.trim();
+  if (!trimmedTitle) {
+    return false;
+  }
+
+  try {
+    const existing = await readFile(filePath, 'utf8');
+    const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+    const line = JSON.stringify({ type: 'custom-title', customTitle: trimmedTitle, sessionId });
+
+    await appendFile(filePath, `${separator}${line}\n`, 'utf8');
+    return true;
+  } catch {
+    // A session with no transcript yet (or an unreadable one) keeps its rename
+    // in the database only; the caller falls back to that path.
+    return false;
+  }
 }
 
 /**

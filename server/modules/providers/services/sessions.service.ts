@@ -321,7 +321,10 @@ export const sessionsService = {
   /**
    * Renames one session by id without requiring the caller to pass provider.
    */
-  renameSessionById(sessionId: string, summary: string): { sessionId: string; summary: string } {
+  async renameSessionById(
+    sessionId: string,
+    summary: string
+  ): Promise<{ sessionId: string; summary: string }> {
     const session = sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
@@ -330,7 +333,20 @@ export const sessionsService = {
       });
     }
 
-    sessionsDb.updateSessionCustomName(sessionId, summary);
+    const renamed = await sessionsDb.updateSessionCustomName(sessionId, summary);
+    if (!renamed) {
+      // A rename lives in the transcript so it stays portable. Until the
+      // provider writes one there is nowhere to put it, and storing it in the
+      // database instead would produce a name only this app can see.
+      throw new AppError(
+        `Session "${sessionId}" has no transcript yet. Send a message before renaming it.`,
+        {
+          code: 'SESSION_HAS_NO_TRANSCRIPT',
+          statusCode: 409,
+        }
+      );
+    }
+
     return { sessionId, summary };
   },
 

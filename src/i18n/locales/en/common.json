@@ -266,5 +266,8 @@
       "updateAvailable": "Update available",
       "closeSidebar": "Close sidebar"
     }
+  },
+  "tooltips": {
+    "renameNeedsTranscript": "Send a message before renaming this session"
   }
 }

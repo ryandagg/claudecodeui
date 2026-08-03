@@ -222,12 +222,8 @@ export const sessionsDb = {
           | undefined;
 
         db.prepare('DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
-        db.prepare(
-          `UPDATE sessions SET
-             provider_session_id = ?,
-             custom_name = COALESCE(custom_name, ?)
-           WHERE session_id = ?`
-        ).run(providerSessionId, duplicate.custom_name, sessionId);
+        db.prepare('UPDATE sessions SET provider_session_id = ? WHERE session_id = ?')
+          .run(providerSessionId, sessionId);
 
         sessionsDb.upsertSessionTranscript(sessionId, {
           providerName: duplicate.custom_name,

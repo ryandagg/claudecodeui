@@ -10,10 +10,12 @@ import {
   findFilesRecursivelyCreatedAfter,
   findProviderSkillMarkdownFiles,
   findTopmostGitRoot,
+  appendSessionCustomTitle,
   readFileTimestamps,
+  readJsonConfig,
   readSessionActivityTimestamps,
   readSessionTimestamps,
-  readJsonConfig,
+  readSessionTitle,
   readProviderSessionActiveModelChange,
   readProviderSkillMarkdownDefinition,
   validateWorkspacePath,
@@ -591,5 +593,102 @@ test('validateWorkspacePath rejects a path outside the workspace root', async ()
     assert.match(result.error ?? '', /within the allowed workspace root/i);
   } finally {
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// readSessionTitle / appendSessionCustomTitle
+// ---------------------------------------------------------------------------
+const writeTitleTranscript = async (dir: string, lines: unknown[]): Promise<string> => {
+  const filePath = path.join(dir, 'titles.jsonl');
+  await fs.writeFile(filePath, lines.map((line) => JSON.stringify(line)).join('\n'), 'utf8');
+  return filePath;
+};
+
+test('readSessionTitle ranks a /rename above a generated title', async () => {
+  const dir = await makeTempDir('title-precedence');
+  try {
+    // ai-title is written LAST; precedence must be by meaning, not position.
+    const filePath = await writeTitleTranscript(dir, [
+      { type: 'last-prompt', lastPrompt: 'raw first prompt text' },
+      { type: 'custom-title', customTitle: 'my explicit rename' },
+      { type: 'ai-title', aiTitle: 'Generated Summary' },
+    ]);
+
+    assert.equal(await readSessionTitle(filePath), 'my explicit rename');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle falls back through ai-title to raw prompt text', async () => {
+  const dir = await makeTempDir('title-fallback');
+  try {
+    const withAiTitle = await writeTitleTranscript(dir, [
+      { type: 'last-prompt', lastPrompt: 'raw prompt' },
+      { type: 'ai-title', aiTitle: 'Generated Summary' },
+    ]);
+    assert.equal(await readSessionTitle(withAiTitle), 'Generated Summary');
+
+    const promptOnly = path.join(dir, 'prompt-only.jsonl');
+    await fs.writeFile(promptOnly, JSON.stringify({ type: 'last-prompt', lastPrompt: 'raw prompt' }), 'utf8');
+    assert.equal(await readSessionTitle(promptOnly), 'raw prompt');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle takes the most recent rename of the same rank', async () => {
+  const dir = await makeTempDir('title-latest');
+  try {
+    const filePath = await writeTitleTranscript(dir, [
+      { type: 'custom-title', customTitle: 'first rename' },
+      { type: 'custom-title', customTitle: 'second rename' },
+    ]);
+    assert.equal(await readSessionTitle(filePath), 'second rename');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle returns null for a transcript with no titles', async () => {
+  const dir = await makeTempDir('title-none');
+  try {
+    const filePath = await writeTitleTranscript(dir, [{ type: 'user', text: 'hi' }]);
+    assert.equal(await readSessionTitle(filePath), null);
+    assert.equal(await readSessionTitle(path.join(dir, 'missing.jsonl')), null);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle makes a rename readable back from the transcript', async () => {
+  const dir = await makeTempDir('title-append');
+  try {
+    const filePath = await writeTitleTranscript(dir, [{ type: 'ai-title', aiTitle: 'Generated' }]);
+
+    assert.equal(await appendSessionCustomTitle(filePath, 'sess-1', 'renamed by the app'), true);
+    assert.equal(await readSessionTitle(filePath), 'renamed by the app');
+
+    // The file must stay valid JSONL for every other reader.
+    const contents = await fs.readFile(filePath, 'utf8');
+    for (const line of contents.trim().split('\n')) {
+      JSON.parse(line);
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle reports failure when there is no transcript', async () => {
+  const dir = await makeTempDir('title-append-missing');
+  try {
+    assert.equal(await appendSessionCustomTitle(path.join(dir, 'nope.jsonl'), 'sess-1', 'name'), false);
+    // A blank rename is not written either.
+    const filePath = await writeTitleTranscript(dir, [{ type: 'user', text: 'hi' }]);
+    assert.equal(await appendSessionCustomTitle(filePath, 'sess-1', '   '), false);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });

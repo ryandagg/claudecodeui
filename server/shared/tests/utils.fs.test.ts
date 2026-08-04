@@ -7,7 +7,7 @@ import test from 'node:test';
 import {
   buildLookupMap,
   extractFirstValidJsonlData,
-  findFilesRecursivelyCreatedAfter,
+  findFilesRecursivelyModifiedAfter,
   findProviderSkillMarkdownFiles,
   findTopmostGitRoot,
   appendSessionCustomTitle,
@@ -256,9 +256,9 @@ test('findProviderSkillMarkdownFiles returns [] for a missing root', async () =>
 });
 
 // ---------------------------------------------------------------------------
-// findFilesRecursivelyCreatedAfter
+// findFilesRecursivelyModifiedAfter
 // ---------------------------------------------------------------------------
-test('findFilesRecursivelyCreatedAfter collects matching files across subdirectories', async () => {
+test('findFilesRecursivelyModifiedAfter collects matching files across subdirectories', async () => {
   const dir = await makeTempDir('find-files');
   try {
     await fs.mkdir(path.join(dir, 'sub'), { recursive: true });
@@ -266,7 +266,7 @@ test('findFilesRecursivelyCreatedAfter collects matching files across subdirecto
     await fs.writeFile(path.join(dir, 'sub', 'b.jsonl'), '{}', 'utf8');
     await fs.writeFile(path.join(dir, 'sub', 'c.txt'), 'nope', 'utf8');
 
-    const files = await findFilesRecursivelyCreatedAfter(dir, '.jsonl', null);
+    const files = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', null);
     assert.equal(files.length, 2);
     assert.ok(files.some((f) => f.endsWith('a.jsonl')));
     assert.ok(files.some((f) => f.endsWith(path.join('sub', 'b.jsonl'))));
@@ -275,27 +275,64 @@ test('findFilesRecursivelyCreatedAfter collects matching files across subdirecto
   }
 });
 
-test('findFilesRecursivelyCreatedAfter respects the lastScanAt cutoff', async () => {
+test('findFilesRecursivelyModifiedAfter respects the lastScanAt cutoff', async () => {
   const dir = await makeTempDir('find-files-after');
   try {
     await fs.writeFile(path.join(dir, 'old.jsonl'), '{}', 'utf8');
     // Cutoff in the future means nothing qualifies as "created after".
     const future = new Date(Date.now() + 60_000);
-    assert.deepEqual(await findFilesRecursivelyCreatedAfter(dir, '.jsonl', future), []);
+    assert.deepEqual(await findFilesRecursivelyModifiedAfter(dir, '.jsonl', future), []);
 
     // Cutoff in the past includes the file.
     const past = new Date(Date.now() - 60_000);
-    const found = await findFilesRecursivelyCreatedAfter(dir, '.jsonl', past);
+    const found = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', past);
     assert.equal(found.length, 1);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('findFilesRecursivelyCreatedAfter returns [] for a missing directory', async () => {
+test('findFilesRecursivelyModifiedAfter finds a file created before the cutoff but modified after', async () => {
+  // The regression this guards: filtering on creation time meant a transcript
+  // created last week and appended to today was never re-read, so a rename or
+  // new message made outside the app never reached the database.
+  const dir = await makeTempDir('find-files-modified');
+  try {
+    const filePath = path.join(dir, 'appended.jsonl');
+    await fs.writeFile(filePath, '{}', 'utf8');
+
+    // Backdate creation well before the cutoff, but leave mtime after it.
+    const longAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - 60_000);
+    await fs.utimes(filePath, longAgo, new Date());
+
+    const found = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', cutoff);
+    assert.deepEqual(found, [filePath], 'a modified file must be re-read regardless of when it was created');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('findFilesRecursivelyModifiedAfter skips a file untouched since the cutoff', async () => {
+  const dir = await makeTempDir('find-files-untouched');
+  try {
+    const filePath = path.join(dir, 'quiet.jsonl');
+    await fs.writeFile(filePath, '{}', 'utf8');
+
+    const longAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    await fs.utimes(filePath, longAgo, longAgo);
+
+    const found = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', new Date(Date.now() - 60_000));
+    assert.deepEqual(found, [], 'unchanged files stay out of the incremental scan');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('findFilesRecursivelyModifiedAfter returns [] for a missing directory', async () => {
   const dir = await makeTempDir('find-files-missing');
   try {
-    assert.deepEqual(await findFilesRecursivelyCreatedAfter(path.join(dir, 'nope'), '.jsonl', null), []);
+    assert.deepEqual(await findFilesRecursivelyModifiedAfter(path.join(dir, 'nope'), '.jsonl', null), []);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

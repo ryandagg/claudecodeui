@@ -6,7 +6,7 @@ import { sessionsDb } from '@/modules/database/index.js';
 import {
   buildLookupMap,
   extractFirstValidJsonlData,
-  findFilesRecursivelyCreatedAfter,
+  findFilesRecursivelyModifiedAfter,
   normalizeSessionName,
   readSessionTimestamps,
   readSessionTitle,
@@ -46,7 +46,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    */
   async synchronize(since?: Date): Promise<number> {
     const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
-    const files = await findFilesRecursivelyCreatedAfter(
+    const files = await findFilesRecursivelyModifiedAfter(
       path.join(this.claudeHome, 'projects'),
       '.jsonl',
       since ?? null

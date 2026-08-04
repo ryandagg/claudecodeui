@@ -7,6 +7,13 @@
  * build step. Node 20 (the pinned runtime) does not expand globs passed to
  * `node --test`, so we enumerate the test files here and hand them over explicitly.
  *
+ * The two halves of the codebase deliberately map the same `@/` alias to different
+ * roots -- `tsconfig.json` sends it to /src, `server/tsconfig.json` sends it to
+ * /server -- and tsx honours exactly one tsconfig per process (chosen from the cwd,
+ * or from TSX_TSCONFIG_PATH). One process therefore cannot resolve both halves, so
+ * we split the run into a backend group and a frontend group and spawn each with
+ * its own tsconfig. Under --coverage that means one report per group.
+ *
  * Usage:
  *   node scripts/run-tests.js [--coverage] [--watch] [pathFilter ...]
  *
@@ -79,28 +86,70 @@ if (testFiles.length === 0) {
   process.exit(1);
 }
 
-const nodeArgs = ['--import', 'tsx', '--test'];
+const baseNodeArgs = ['--import', 'tsx', '--test'];
 if (wantsCoverage) {
   // The pinned Node 20 runtime supports the coverage collector but not the
   // `--test-coverage-exclude` filter flag (added in newer releases), so the
   // report lists test files too; read the first-party source rows.
-  nodeArgs.push('--experimental-test-coverage');
+  baseNodeArgs.push('--experimental-test-coverage');
 }
 if (wantsWatch) {
-  nodeArgs.push('--watch');
+  baseNodeArgs.push('--watch');
 }
-nodeArgs.push(...testFiles);
 
-const child = spawn(process.execPath, nodeArgs, {
-  cwd: projectRoot,
-  stdio: 'inherit',
-  env: process.env,
-});
+const serverRoot = path.join(projectRoot, `server${path.sep}`);
 
-child.on('exit', (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
+// Backend files resolve @/ against server/tsconfig.json; everything else (src, shared)
+// against the root tsconfig, which tsx finds on its own from the cwd.
+const groups = [
+  {
+    name: 'server',
+    files: testFiles.filter((file) => file.startsWith(serverRoot)),
+    tsconfig: path.join(projectRoot, 'server', 'tsconfig.json'),
+  },
+  {
+    name: 'client',
+    files: testFiles.filter((file) => !file.startsWith(serverRoot)),
+    tsconfig: null,
+  },
+].filter((group) => group.files.length > 0);
+
+function runGroup(group) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [...baseNodeArgs, ...group.files], {
+      cwd: projectRoot,
+      stdio: 'inherit',
+      env: group.tsconfig
+        ? { ...process.env, TSX_TSCONFIG_PATH: group.tsconfig }
+        : process.env,
+    });
+
+    child.on('exit', (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      resolve(code ?? 1);
+    });
+  });
+}
+
+// --watch never exits, so the groups have to run side by side; a normal run stays
+// sequential to keep the two TAP streams from interleaving.
+let exitCode = 0;
+if (wantsWatch) {
+  const codes = await Promise.all(groups.map(runGroup));
+  exitCode = codes.find((code) => code !== 0) ?? 0;
+} else {
+  for (const group of groups) {
+    if (groups.length > 1) {
+      console.log(`\n# ${group.name} (${group.files.length} files)`);
+    }
+    const code = await runGroup(group);
+    if (code !== 0) {
+      exitCode = code;
+    }
   }
-  process.exit(code ?? 1);
-});
+}
+
+process.exit(exitCode);

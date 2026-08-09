@@ -11,6 +11,7 @@ import {
   createCompleteMessage,
   createNormalizedMessage,
   generateMessageId,
+  getPathBasename,
   normalizeProjectPath,
   normalizeProviderTimestamp,
   normalizeSessionName,
@@ -22,6 +23,8 @@ import {
   readStringArray,
   readStringRecord,
   sanitizeLeafDirectoryName,
+  toWindowsUncPathForWsl,
+  translateWindowsPathForPosix,
 } from '@/shared/utils.js';
 import type { ProviderSkillSource } from '@/shared/types.js';
 
@@ -81,6 +84,134 @@ test('normalizeProjectPath handles Windows drive paths and long-path prefixes', 
   assert.equal(normalizeProjectPath('C:\\Users\\me\\project\\'), 'C:\\Users\\me\\project');
   // \\?\ long-path prefix is stripped before normalization.
   assert.equal(normalizeProjectPath('\\\\?\\C:\\Users\\me'), 'C:\\Users\\me');
+});
+
+// ---------------------------------------------------------------------------
+// getPathBasename
+// ---------------------------------------------------------------------------
+test('getPathBasename splits on both separators regardless of host platform', () => {
+  assert.equal(getPathBasename('/home/me/project'), 'project');
+  assert.equal(getPathBasename('C:\\Users\\me\\project'), 'project');
+  assert.equal(getPathBasename('\\\\wsl$\\Ubuntu\\home\\me\\project'), 'project');
+});
+
+test('getPathBasename ignores trailing separators and handles roots', () => {
+  assert.equal(getPathBasename('/home/me/project/'), 'project');
+  assert.equal(getPathBasename('C:\\Users\\me\\project\\'), 'project');
+  assert.equal(getPathBasename('/'), '');
+});
+
+// ---------------------------------------------------------------------------
+// translateWindowsPathForPosix
+// ---------------------------------------------------------------------------
+const withWslDistribution = (distributionName: string | undefined, run: () => void): void => {
+  const previous = process.env.WSL_DISTRO_NAME;
+  if (distributionName === undefined) {
+    delete process.env.WSL_DISTRO_NAME;
+  } else {
+    process.env.WSL_DISTRO_NAME = distributionName;
+  }
+
+  try {
+    run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WSL_DISTRO_NAME;
+    } else {
+      process.env.WSL_DISTRO_NAME = previous;
+    }
+  }
+};
+
+test('translateWindowsPathForPosix leaves POSIX paths untouched', () => {
+  assert.deepEqual(translateWindowsPathForPosix('/home/me/project'), {
+    path: '/home/me/project',
+  });
+});
+
+test('translateWindowsPathForPosix maps a WSL UNC path onto the distro filesystem', () => {
+  withWslDistribution('Ubuntu', () => {
+    // Both spellings of the share address the same distro root.
+    assert.deepEqual(
+      translateWindowsPathForPosix('\\\\wsl$\\Ubuntu\\home\\me\\project'),
+      { path: '/home/me/project' },
+    );
+    assert.deepEqual(
+      translateWindowsPathForPosix('\\\\wsl.localhost\\Ubuntu\\home\\me\\project'),
+      { path: '/home/me/project' },
+    );
+  });
+});
+
+test('translateWindowsPathForPosix rejects a UNC path for a different distribution', () => {
+  withWslDistribution('Ubuntu', () => {
+    const result = translateWindowsPathForPosix('\\\\wsl$\\Debian\\home\\me\\project');
+    assert.equal(result.path, undefined);
+    assert.match(result.error ?? '', /Debian/);
+  });
+});
+
+test('translateWindowsPathForPosix never returns a Windows-shaped path on POSIX', () => {
+  // The regression under test: path.resolve() on POSIX silently turns an
+  // absolute Windows path into a relative one under process.cwd(). Whatever
+  // the environment, the caller must never receive backslashes back.
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  for (const windowsPath of [
+    'C:\\Users\\me\\project',
+    '\\\\some-server\\share\\project',
+    '\\\\wsl$\\Ubuntu\\home\\me\\project',
+  ]) {
+    const result = translateWindowsPathForPosix(windowsPath);
+    assert.ok(
+      result.error !== undefined || !(result.path ?? '').includes('\\'),
+      `expected an error or a backslash-free path for ${windowsPath}, got ${JSON.stringify(result)}`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// toWindowsUncPathForWsl
+// ---------------------------------------------------------------------------
+test('toWindowsUncPathForWsl renders a distro path as a UNC share', () => {
+  withWslDistribution('Ubuntu', () => {
+    assert.equal(
+      toWindowsUncPathForWsl('/home/me/project'),
+      '\\\\wsl.localhost\\Ubuntu\\home\\me\\project',
+    );
+  });
+});
+
+test('toWindowsUncPathForWsl maps /mnt/<drive> back to a drive letter', () => {
+  withWslDistribution('Ubuntu', () => {
+    assert.equal(toWindowsUncPathForWsl('/mnt/c/Users/me'), 'C:\\Users\\me');
+    assert.equal(toWindowsUncPathForWsl('/mnt/c'), 'C:\\');
+  });
+});
+
+test('toWindowsUncPathForWsl returns null when there is no Windows equivalent', () => {
+  withWslDistribution(undefined, () => {
+    assert.equal(toWindowsUncPathForWsl('/home/me/project'), null);
+  });
+
+  withWslDistribution('Ubuntu', () => {
+    assert.equal(toWindowsUncPathForWsl('relative/path'), null);
+  });
+});
+
+test('toWindowsUncPathForWsl round-trips through translateWindowsPathForPosix', () => {
+  // On Windows the translation is a no-op, so the round trip is POSIX-only.
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  withWslDistribution('Ubuntu', () => {
+    const windowsPath = toWindowsUncPathForWsl('/home/me/project');
+    assert.ok(windowsPath);
+    assert.deepEqual(translateWindowsPathForPosix(windowsPath), { path: '/home/me/project' });
+  });
 });
 
 // ---------------------------------------------------------------------------

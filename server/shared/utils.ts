@@ -113,6 +113,28 @@ export class AppError extends Error {
 export const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || os.homedir();
 
 /**
+ * Expands a leading `~` to {@link WORKSPACES_ROOT}.
+ *
+ * Without this, `~/project` survives normalization intact and then resolves
+ * against `process.cwd()`, producing a literal `~` directory.
+ */
+export function expandHomeShorthand(inputPath: string): string {
+  if (!inputPath) {
+    return inputPath;
+  }
+
+  if (inputPath === '~') {
+    return WORKSPACES_ROOT;
+  }
+
+  if (inputPath.startsWith('~/') || inputPath.startsWith('~\\')) {
+    return path.join(WORKSPACES_ROOT, inputPath.slice(2));
+  }
+
+  return inputPath;
+}
+
+/**
  * System-critical paths that must never be used as workspace roots.
  *
  * The validation helper blocks these values directly and also blocks paths
@@ -157,12 +179,129 @@ function stripWindowsLongPathPrefix(inputPath: string): string {
   return inputPath;
 }
 
+/**
+ * True when the path uses Windows syntax: a UNC share (`\\host\share`) or a
+ * drive letter (`C:\`, `C:/`). Independent of the host platform.
+ */
+function isWindowsStylePath(inputPath: string): boolean {
+  return inputPath.startsWith('\\\\') || /^[a-zA-Z]:([\\/]|$)/.test(inputPath);
+}
+
 function shouldUseWindowsPathNormalization(inputPath: string): boolean {
   if (process.platform === 'win32') {
     return true;
   }
 
-  return inputPath.startsWith('\\\\') || /^[a-zA-Z]:([\\/]|$)/.test(inputPath);
+  return isWindowsStylePath(inputPath);
+}
+
+/** `\\wsl$\Ubuntu\home\me` and `\\wsl.localhost\Ubuntu\home\me` both reach the same place. */
+const WSL_UNC_PATTERN = /^\\\\(?:wsl\$|wsl\.localhost)\\([^\\]+)(?:\\(.*))?$/i;
+const WINDOWS_DRIVE_PATTERN = /^([a-zA-Z]):[\\/]?(.*)$/;
+
+/**
+ * True when this Linux process is running inside WSL, and can therefore reach
+ * Windows executables through interop (`powershell.exe`, `explorer.exe`, ...).
+ */
+export function isRunningUnderWsl(): boolean {
+  if (process.platform !== 'linux') {
+    return false;
+  }
+
+  if (process.env.WSL_DISTRO_NAME) {
+    return true;
+  }
+
+  try {
+    return /microsoft/i.test(fs.readFileSync('/proc/version', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Maps a Windows-syntax path onto the filesystem this server actually sees.
+ *
+ * Node's `path.resolve` is platform-bound: on POSIX it treats backslashes as
+ * ordinary filename characters, so an absolute Windows path silently degrades
+ * into a *relative* one and gets appended to `process.cwd()`. Callers then
+ * create a directory whose name is the whole original string. Translate the
+ * cases we can and reject the rest, so the failure is never silent.
+ *
+ * Returns the path unchanged on Windows, or when it isn't Windows-shaped.
+ */
+export function translateWindowsPathForPosix(inputPath: string): { path?: string; error?: string } {
+  if (process.platform === 'win32' || !isWindowsStylePath(inputPath)) {
+    return { path: inputPath };
+  }
+
+  const wslMatch = WSL_UNC_PATTERN.exec(inputPath);
+  if (wslMatch) {
+    const [, distributionName, remainder = ''] = wslMatch;
+    const currentDistribution = process.env.WSL_DISTRO_NAME;
+
+    if (currentDistribution && currentDistribution.toLowerCase() !== distributionName.toLowerCase()) {
+      return {
+        error: `Path points at WSL distribution "${distributionName}", but this server runs inside "${currentDistribution}". Use a native Linux path instead.`,
+      };
+    }
+
+    // `\\wsl$\<distro>\` is Windows' view of this distro's root — strip it.
+    return { path: normalizeProjectPath(`/${remainder.replace(/\\/g, '/')}`) };
+  }
+
+  const driveMatch = WINDOWS_DRIVE_PATTERN.exec(inputPath);
+  if (driveMatch && isRunningUnderWsl()) {
+    const [, driveLetter, remainder = ''] = driveMatch;
+    const driveMountRoot = `/mnt/${driveLetter.toLowerCase()}`;
+
+    if (fs.existsSync(driveMountRoot)) {
+      return { path: normalizeProjectPath(`${driveMountRoot}/${remainder.replace(/\\/g, '/')}`) };
+    }
+
+    return {
+      error: `Windows drive ${driveLetter.toUpperCase()}: is not mounted at ${driveMountRoot} in this environment. Use a native Linux path instead.`,
+    };
+  }
+
+  return {
+    error: `Windows-style paths are not supported by a server running on ${process.platform}. Use a native path instead (for example /home/you/project).`,
+  };
+}
+
+/**
+ * Renders a POSIX path the way Windows sees it, for handing to a Windows
+ * process from inside WSL (e.g. as a dialog's starting directory).
+ *
+ * This is the inverse of {@link translateWindowsPathForPosix}. Returns null
+ * when there is no Windows-visible equivalent.
+ */
+export function toWindowsUncPathForWsl(posixPath: string): string | null {
+  const distributionName = process.env.WSL_DISTRO_NAME;
+  if (!distributionName || !posixPath.startsWith('/')) {
+    return null;
+  }
+
+  // Anything under /mnt/<drive> is already a Windows drive — address it as one
+  // rather than routing back through the WSL share.
+  const driveMatch = /^\/mnt\/([a-z])(\/.*)?$/i.exec(posixPath);
+  if (driveMatch) {
+    const [, driveLetter, remainder = ''] = driveMatch;
+    return `${driveLetter.toUpperCase()}:${remainder.replace(/\//g, '\\') || '\\'}`;
+  }
+
+  return `\\\\wsl.localhost\\${distributionName}${posixPath.replace(/\//g, '\\')}`;
+}
+
+/**
+ * Last path segment, splitting on both separators.
+ *
+ * `path.basename` is platform-bound, so on POSIX it cannot split a
+ * Windows-shaped path and hands back the entire string as the "name".
+ */
+export function getPathBasename(inputPath: string): string {
+  const segments = inputPath.split(/[\\/]+/).filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? '';
 }
 
 /**
@@ -220,7 +359,25 @@ export async function validateWorkspacePath(requestedPath: string): Promise<Work
       };
     }
 
-    const absolutePath = path.resolve(normalizedRequestedPath);
+    // Map Windows syntax onto this filesystem before `path.resolve` can
+    // silently reinterpret it as a relative path under process.cwd().
+    const translation = translateWindowsPathForPosix(normalizedRequestedPath);
+    if (!translation.path) {
+      return {
+        valid: false,
+        error: translation.error ?? 'Workspace path is not usable on this platform',
+      };
+    }
+
+    const expandedPath = expandHomeShorthand(translation.path);
+    if (!path.isAbsolute(expandedPath)) {
+      return {
+        valid: false,
+        error: `Workspace path must be absolute: ${expandedPath}`,
+      };
+    }
+
+    const absolutePath = path.resolve(expandedPath);
     const normalizedPath = normalizeProjectPath(absolutePath);
 
     if (FORBIDDEN_WORKSPACE_PATHS.includes(normalizedPath) || normalizedPath === '/') {

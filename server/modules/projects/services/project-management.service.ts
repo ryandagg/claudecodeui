@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
 import { projectsDb } from '@/modules/database/index.js';
 import type {
@@ -7,7 +6,7 @@ import type {
   ProjectRepositoryRow,
   WorkspacePathValidationResult,
 } from '@/shared/types.js';
-import { AppError, normalizeProjectPath, validateWorkspacePath } from '@/shared/utils.js';
+import { AppError, getPathBasename, normalizeProjectPath, validateWorkspacePath } from '@/shared/utils.js';
 
 type CreateProjectInput = {
   projectPath: string;
@@ -65,7 +64,7 @@ function resolveDisplayName(customName: string | null | undefined, projectPath: 
     return trimmedCustomName;
   }
 
-  return path.basename(projectPath) || projectPath;
+  return getPathBasename(projectPath) || projectPath;
 }
 
 function mapProjectRowToApiView(projectRow: ProjectRepositoryRow): ProjectApiView {

@@ -60,19 +60,21 @@ const migrateLegacySessionNames = (db: Database): void => {
 
   if (hasSessionsTable) {
     console.log('Running migration: Merging session_names into sessions');
+    // Identity only. `sessions` no longer has `custom_name` or `updated_at` —
+    // both are transcript-derived now and are restored by the first scan — and
+    // naming them here fails outright on a database old enough to still have a
+    // session_names table.
     db.exec(`
-      INSERT INTO sessions (session_id, provider, created_at, updated_at)
+      INSERT INTO sessions (session_id, provider, created_at)
       SELECT
         session_id,
         COALESCE(provider, 'claude'),
-        COALESCE(created_at, CURRENT_TIMESTAMP),
-        COALESCE(updated_at, CURRENT_TIMESTAMP)
+        COALESCE(created_at, CURRENT_TIMESTAMP)
       FROM session_names
       WHERE true
       ON CONFLICT(session_id) DO UPDATE SET
         provider = excluded.provider,
-        created_at = COALESCE(sessions.created_at, excluded.created_at),
-        updated_at = COALESCE(excluded.updated_at, sessions.updated_at)
+        created_at = COALESCE(sessions.created_at, excluded.created_at)
     `);
     db.exec('DROP TABLE session_names');
     return;

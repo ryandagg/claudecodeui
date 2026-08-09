@@ -134,21 +134,16 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    // App-created sessions are keyed by an app id, so disk-discovered provider
-    // ids must be resolved through the provider-id mapping first.
-    const existingSession = sessionsDb.getSessionByProviderSessionId(parsed.sessionId)
-      ?? sessionsDb.getSessionById(parsed.sessionId);
-    const existingSessionName = existingSession?.custom_name;
-    if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {
-      return {
-        ...parsed,
-        sessionName: normalizeSessionName(existingSessionName, 'Untitled Claude Session'),
-      };
-    }
-
     // The transcript wins: it carries the user's own /rename. history.jsonl's
-    // `display` is only the first prompt, so it is the last resort rather than
-    // the first choice it used to be.
+    // `display` is only the first prompt (literally "/rename foo" when the
+    // rename was typed as a slash command), so it is the last resort rather
+    // than the first choice it used to be.
+    //
+    // Deliberately no "keep the name already in the database" short-circuit.
+    // That guard existed to stop sync overwriting a user's rename with a
+    // derived title, back when the name was app-owned. Renames now live in the
+    // transcript, so the guard only pinned whichever label was recorded first
+    // and prevented the transcript from ever correcting it.
     const sessionName = (await readSessionTitle(filePath)) ?? nameMap.get(parsed.sessionId);
 
     return {

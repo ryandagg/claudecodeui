@@ -1,9 +1,8 @@
-import os from 'node:os';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import {
+  getClaudeHome,
   buildLookupMap,
   extractFirstValidJsonlData,
   findFilesRecursivelyModifiedAfter,
@@ -24,7 +23,7 @@ type ParsedSession = {
  */
 export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
   private readonly provider = 'claude' as const;
-  private readonly claudeHome = path.join(os.homedir(), '.claude');
+  private get claudeHome(): string { return getClaudeHome(); }
 
   /**
    * Returns true when a JSONL file is a subagent transcript rather than a
@@ -152,46 +151,4 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     };
   }
 
-  private async extractSessionAiTitleFromEnd(
-    filePath: string,
-    sessionId: string
-  ): Promise<string | undefined> {
-    try {
-      const content = await readFile(filePath, 'utf8');
-      const lines = content.split(/\r?\n/);
-
-      for (let index = lines.length - 1; index >= 0; index -= 1) {
-        const line = lines[index]?.trim();
-        if (!line) {
-          continue;
-        }
-
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          continue;
-        }
-
-        const data = parsed as Record<string, unknown>;
-        const eventType = typeof data.type === 'string' ? data.type : undefined;
-        const eventSessionId = typeof data.sessionId === 'string' ? data.sessionId : undefined;
-        const aiTitle = typeof data.aiTitle === 'string' ? data.aiTitle : undefined;
-        const lastPrompt = typeof data.lastPrompt === 'string' ? data.lastPrompt : undefined;
-        const claudeRenamedTitle = typeof data.customTitle === 'string' ? data.customTitle : undefined;
-
-        if (
-          (eventType === 'ai-title' && eventSessionId === sessionId && aiTitle?.trim()) ||
-          (eventType === 'last-prompt' && eventSessionId === sessionId && lastPrompt?.trim()) ||
-          (eventType === "custom-title" && eventSessionId === sessionId && claudeRenamedTitle?.trim())
-        ) {
-          return aiTitle || lastPrompt || claudeRenamedTitle;
-        }
-      }
-    } catch {
-      // Ignore missing/unreadable files so sync can continue.
-    }
-
-    return undefined;
-  }
 }

@@ -659,7 +659,7 @@ test('readSessionTitle ranks a /rename above a generated title', async () => {
   }
 });
 
-test('readSessionTitle falls back through ai-title to raw prompt text', async () => {
+test('readSessionTitle falls back to ai-title when there is no rename', async () => {
   const dir = await makeTempDir('title-fallback');
   try {
     const withAiTitle = await writeTitleTranscript(dir, [
@@ -667,10 +667,29 @@ test('readSessionTitle falls back through ai-title to raw prompt text', async ()
       { type: 'ai-title', aiTitle: 'Generated Summary' },
     ]);
     assert.equal(await readSessionTitle(withAiTitle), 'Generated Summary');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
 
-    const promptOnly = path.join(dir, 'prompt-only.jsonl');
-    await fs.writeFile(promptOnly, JSON.stringify({ type: 'last-prompt', lastPrompt: 'raw prompt' }), 'utf8');
-    assert.equal(await readSessionTitle(promptOnly), 'raw prompt');
+test('readSessionTitle never names a session after its latest prompt', async () => {
+  // Regression: `last-prompt` is rewritten every turn, so treating it as a
+  // title made the sidebar label follow whatever the user typed most recently.
+  // A transcript with only last-prompt lines has no title at all.
+  const dir = await makeTempDir('title-last-prompt');
+  try {
+    const filePath = await writeTitleTranscript(dir, [
+      { type: 'last-prompt', lastPrompt: 'an early question' },
+      { type: 'last-prompt', lastPrompt: 'a much later unrelated question' },
+    ]);
+    assert.equal(await readSessionTitle(filePath), null);
+
+    // And it must not outrank a real title either.
+    const withRename = await writeTitleTranscript(dir, [
+      { type: 'custom-title', customTitle: 'my rename' },
+      { type: 'last-prompt', lastPrompt: 'typed long after the rename' },
+    ]);
+    assert.equal(await readSessionTitle(withRename), 'my rename');
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -702,6 +721,8 @@ test('readSessionTitle returns null for a transcript with no titles', async () =
 
 test('appendSessionCustomTitle makes a rename readable back from the transcript', async () => {
   const dir = await makeTempDir('title-append');
+  const previousHome = process.env.CLAUDE_HOME;
+  process.env.CLAUDE_HOME = dir;
   try {
     const filePath = await writeTitleTranscript(dir, [{ type: 'ai-title', aiTitle: 'Generated' }]);
 
@@ -714,6 +735,51 @@ test('appendSessionCustomTitle makes a rename readable back from the transcript'
       JSON.parse(line);
     }
   } finally {
+    if (previousHome === undefined) {
+      delete process.env.CLAUDE_HOME;
+    } else {
+      process.env.CLAUDE_HOME = previousHome;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle refuses to write outside CLAUDE_HOME', async () => {
+  // The guard that stops an isolated run from reaching the user's real
+  // transcripts. Transcript paths come from the database, so a copied database
+  // still carries absolute paths into the real tree — redirecting CLAUDE_HOME
+  // alone is not enough.
+  const dir = await makeTempDir('title-outside-home');
+  try {
+    const outsidePath = path.join(dir, 'not-in-claude-home.jsonl');
+    await fs.writeFile(outsidePath, JSON.stringify({ type: 'user' }), 'utf8');
+    const contentsBefore = await fs.readFile(outsidePath, 'utf8');
+
+    assert.equal(await appendSessionCustomTitle(outsidePath, 'sess-1', 'should not land'), false);
+    assert.equal(await fs.readFile(outsidePath, 'utf8'), contentsBefore, 'file must be untouched');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle writes when the path is inside CLAUDE_HOME', async () => {
+  const dir = await makeTempDir('title-inside-home');
+  const previousHome = process.env.CLAUDE_HOME;
+  try {
+    // Redirect the provider home at the temp tree — the isolation this exists
+    // to make possible.
+    process.env.CLAUDE_HOME = dir;
+    const insidePath = path.join(dir, 'session.jsonl');
+    await fs.writeFile(insidePath, JSON.stringify({ type: 'user' }) + '\n', 'utf8');
+
+    assert.equal(await appendSessionCustomTitle(insidePath, 'sess-1', 'allowed'), true);
+    assert.match(await fs.readFile(insidePath, 'utf8'), /"customTitle":"allowed"/);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.CLAUDE_HOME;
+    } else {
+      process.env.CLAUDE_HOME = previousHome;
+    }
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

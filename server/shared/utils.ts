@@ -1392,13 +1392,46 @@ export async function readSessionActivityTimestamps(
 }
 
 /**
+ * Root of the Claude CLI's own data directory — transcripts, history, skills.
+ *
+ * Overridable so tests and one-off scripts can point the whole provider tree at
+ * a temp directory, the way `DATABASE_PATH` isolates the database. Without an
+ * equivalent knob there was no way to exercise code that writes transcripts
+ * without writing the user's real ones.
+ */
+export function getClaudeHome(): string {
+  return process.env.CLAUDE_HOME || path.join(os.homedir(), '.claude');
+}
+
+/**
+ * Guards writes into the provider's data directory.
+ *
+ * Redirecting {@link CLAUDE_HOME} is not sufficient on its own: transcript
+ * paths are read from the database, so a copied database still carries
+ * absolute paths into the real tree. This refuses any write that lands outside
+ * the configured home, so an isolated run fails loudly instead of quietly
+ * modifying the user's transcripts.
+ */
+function isInsideClaudeHome(filePath: string): boolean {
+  // Resolved per call, not captured at module load, so a test or script can
+  // redirect the home around a single operation.
+  const resolvedHome = path.resolve(getClaudeHome());
+  const resolvedTarget = path.resolve(filePath);
+  return resolvedTarget === resolvedHome || resolvedTarget.startsWith(`${resolvedHome}${path.sep}`);
+}
+
+/**
  * Titles a Claude transcript carries, in order of authority.
  *
  * `custom-title` is written by the user's `/rename`, so it outranks anything
- * generated. `ai-title` is a model-written summary. `last-prompt` is raw prompt
- * text and only stands in when nothing better exists.
+ * generated. `ai-title` is a model-written summary of the conversation.
+ *
+ * `last-prompt` is deliberately excluded. It is not a title — Claude rewrites
+ * it every turn, so using it as a name makes the sidebar label follow whatever
+ * the user typed most recently. A session with no title at all falls back to
+ * `history.jsonl`'s `display` (the *first* prompt), which at least stays put.
  */
-const SESSION_TITLE_PRECEDENCE = ['customTitle', 'aiTitle', 'lastPrompt'] as const;
+const SESSION_TITLE_PRECEDENCE = ['customTitle', 'aiTitle'] as const;
 
 /**
  * Reads the best available title out of a session transcript.
@@ -1468,6 +1501,16 @@ export async function appendSessionCustomTitle(
 ): Promise<boolean> {
   const trimmedTitle = customTitle.trim();
   if (!trimmedTitle) {
+    return false;
+  }
+
+  // Refuse to write outside the configured provider home. Transcript paths come
+  // from the database, so an isolated run against a copied database would
+  // otherwise reach straight back into the user's real transcripts.
+  if (!isInsideClaudeHome(filePath)) {
+    console.warn(
+      `Refusing to write a session title outside CLAUDE_HOME (${getClaudeHome()}): ${filePath}`
+    );
     return false;
   }
 

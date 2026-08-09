@@ -475,6 +475,26 @@ const splitSessionsIntoIdentityAndTranscripts = (db: Database): void => {
       ON CONFLICT(session_id) DO NOTHING
     `);
 
+    // Names set in the app before this change exist only here — they were
+    // never written to disk — so stash them before the column goes. A later
+    // async pass writes each one into its transcript as a `custom-title` line,
+    // which is what makes it durable and portable. Migrations are synchronous,
+    // hence the hand-off rather than doing the file writes here.
+    if (columnNames.includes('custom_name')) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS legacy_session_names (
+          session_id TEXT PRIMARY KEY NOT NULL,
+          custom_name TEXT NOT NULL
+        )
+      `);
+      db.exec(`
+        INSERT INTO legacy_session_names (session_id, custom_name)
+        SELECT session_id, custom_name FROM sessions
+        WHERE custom_name IS NOT NULL AND trim(custom_name) <> ''
+        ON CONFLICT(session_id) DO NOTHING
+      `);
+    }
+
     // Neither column is indexed, so DROP COLUMN is safe here (SQLite 3.35+).
     for (const legacyColumn of legacyDerivedColumns) {
       db.exec(`ALTER TABLE sessions DROP COLUMN ${legacyColumn}`);

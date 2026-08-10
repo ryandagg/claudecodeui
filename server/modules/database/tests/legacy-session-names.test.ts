@@ -263,6 +263,29 @@ test('runs once: drops its table and appends nothing on a second call', async ()
   });
 });
 
+test('a crash partway through resumes without re-appending a written title', async () => {
+  await withIsolatedEnvironment(async ({ claudeHome }) => {
+    const transcriptPath = await seedLegacySession({
+      claudeHome,
+      sessionId: 'resume-me',
+      legacyName: 'a chosen name',
+      transcriptLines: [{ type: 'user', text: 'hi' }],
+    });
+    const db = getConnection();
+
+    await flushLegacySessionNamesToTranscripts(db);
+    const afterFirst = await readFile(transcriptPath as string, 'utf8');
+
+    // Simulate an interrupted run: the table survived, but this row was already
+    // processed, so it must not be handed out again.
+    db.exec(`CREATE TABLE IF NOT EXISTS legacy_session_names (
+      session_id TEXT PRIMARY KEY NOT NULL, custom_name TEXT NOT NULL)`);
+    await flushLegacySessionNamesToTranscripts(db);
+
+    assert.equal(await readFile(transcriptPath as string, 'utf8'), afterFirst);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The property the feature exists for
 // ---------------------------------------------------------------------------

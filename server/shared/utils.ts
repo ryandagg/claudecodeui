@@ -1441,10 +1441,16 @@ export async function readSessionTranscriptFacts(filePath: string): Promise<{
 /**
  * Root of the Claude CLI's own data directory — transcripts, history, skills.
  *
- * Overridable so tests and one-off scripts can point the whole provider tree at
- * a temp directory, the way `DATABASE_PATH` isolates the database. Without an
- * equivalent knob there was no way to exercise code that writes transcripts
+ * Overridable so tests and one-off scripts can point session reads and writes
+ * at a temp directory, the way `DATABASE_PATH` isolates the database. Without
+ * an equivalent knob there was no way to exercise code that writes transcripts
  * without writing the user's real ones.
+ *
+ * **Scope: session transcript read/write, the watcher root, and skills.** Auth,
+ * settings and command lookups still resolve `~/.claude` directly, so this is
+ * not a complete sandbox for the provider directory. The write guard in
+ * {@link appendSessionCustomTitle} — not this redirect — is what actually
+ * prevents an isolated run from modifying real transcripts.
  */
 export function getClaudeHome(): string {
   return process.env.CLAUDE_HOME || path.join(os.homedir(), '.claude');

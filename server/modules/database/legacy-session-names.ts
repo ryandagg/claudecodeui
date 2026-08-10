@@ -72,6 +72,9 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
   const updateProviderName = db.prepare(
     'UPDATE session_transcripts SET provider_name = ? WHERE session_id = ?'
   );
+  // Retired per row rather than in one drop at the end, so a crash partway
+  // through resumes cleanly instead of re-appending titles already written.
+  const retireRow = db.prepare('DELETE FROM legacy_session_names WHERE session_id = ?');
 
   // history.jsonl records the raw first prompt, which the old synchronizer used
   // as a name. Read once rather than per row.
@@ -90,6 +93,7 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
     // Nothing worth preserving: a placeholder, a slash command echo, or no
     // transcript to write into.
     if (!name || name === PLACEHOLDER_NAME || isSlashCommandEcho(name) || !row.jsonl_path) {
+      retireRow.run(row.session_id);
       skipped += 1;
       continue;
     }
@@ -110,6 +114,7 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
       (candidate) => candidate === name || candidate.startsWith(name)
     );
     if (wasGenerated) {
+      retireRow.run(row.session_id);
       skipped += 1;
       continue;
     }
@@ -124,11 +129,13 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
       name
     );
     if (!wrote) {
+      retireRow.run(row.session_id);
       skipped += 1;
       continue;
     }
 
     updateProviderName.run(name, row.session_id);
+    retireRow.run(row.session_id);
     promoted += 1;
   }
 

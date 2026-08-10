@@ -4,11 +4,10 @@ import { sessionsDb } from '@/modules/database/index.js';
 import {
   getClaudeHome,
   buildLookupMap,
-  extractFirstValidJsonlData,
   findFilesRecursivelyModifiedAfter,
   normalizeSessionName,
-  readSessionTimestamps,
-  readSessionTitle,
+  readFileTimestamps,
+  readSessionTranscriptFacts,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
 
@@ -16,6 +15,8 @@ type ParsedSession = {
   sessionId: string;
   projectPath: string;
   sessionName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 /**
@@ -62,7 +63,9 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
         continue;
       }
 
-      const timestamps = await readSessionTimestamps(filePath);
+      const timestamps = parsed.createdAt || parsed.updatedAt
+        ? { createdAt: parsed.createdAt, updatedAt: parsed.updatedAt }
+        : await readFileTimestamps(filePath);
       sessionsDb.createSession(
         parsed.sessionId,
         this.provider,
@@ -95,7 +98,9 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    const timestamps = await readSessionTimestamps(filePath);
+    const timestamps = parsed.createdAt || parsed.updatedAt
+      ? { createdAt: parsed.createdAt, updatedAt: parsed.updatedAt }
+      : await readFileTimestamps(filePath);
     return sessionsDb.createSession(
       parsed.sessionId,
       this.provider,
@@ -114,22 +119,11 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     filePath: string,
     nameMap: Map<string, string>
   ): Promise<ParsedSession | null> {
-    const parsed = await extractFirstValidJsonlData(filePath, (rawData) => {
-      const data = rawData as Record<string, unknown>;
-      const sessionId = typeof data.sessionId === 'string' ? data.sessionId : undefined;
-      const projectPath = typeof data.cwd === 'string' ? data.cwd : undefined;
-
-      if (!sessionId || !projectPath) {
-        return null;
-      }
-
-      return {
-        sessionId,
-        projectPath,
-      };
-    });
-
-    if (!parsed) {
+    // One pass for identity, title and activity span. The watcher fires on
+    // every append to an active transcript, so scanning once per fact would
+    // re-read a growing multi-megabyte file several times per change.
+    const facts = await readSessionTranscriptFacts(filePath);
+    if (!facts.sessionId || !facts.projectPath) {
       return null;
     }
 
@@ -143,11 +137,14 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     // derived title, back when the name was app-owned. Renames now live in the
     // transcript, so the guard only pinned whichever label was recorded first
     // and prevented the transcript from ever correcting it.
-    const sessionName = (await readSessionTitle(filePath)) ?? nameMap.get(parsed.sessionId);
+    const sessionName = facts.title ?? nameMap.get(facts.sessionId);
 
     return {
-      ...parsed,
+      sessionId: facts.sessionId,
+      projectPath: facts.projectPath,
       sessionName: normalizeSessionName(sessionName, 'Untitled Claude Session'),
+      createdAt: facts.createdAt,
+      updatedAt: facts.updatedAt,
     };
   }
 

@@ -1345,6 +1345,30 @@ export async function readFileTimestamps(
 export async function readSessionActivityTimestamps(
   filePath: string
 ): Promise<{ createdAt?: string; updatedAt?: string }> {
+  const { createdAt, updatedAt } = await readSessionTranscriptFacts(filePath);
+  return createdAt || updatedAt ? { createdAt, updatedAt } : {};
+}
+
+/**
+ * Everything the synchronizer needs from a transcript, in a single pass.
+ *
+ * Identity, title and activity span all come from the same lines, so reading
+ * the file once per change matters: the watcher polls every few seconds and a
+ * busy transcript reaches megabytes, so a scan per fact multiplies the cost of
+ * every append. {@link readSessionTitle} and
+ * {@link readSessionActivityTimestamps} remain as focused wrappers for callers
+ * that genuinely want one fact.
+ */
+export async function readSessionTranscriptFacts(filePath: string): Promise<{
+  sessionId?: string;
+  projectPath?: string;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}> {
+  const titlesByRank = new Map<string, string>();
+  let sessionId: string | undefined;
+  let projectPath: string | undefined;
   let earliestTime = Number.POSITIVE_INFINITY;
   let latestTime = Number.NEGATIVE_INFINITY;
 
@@ -1358,37 +1382,59 @@ export async function readSessionActivityTimestamps(
         continue;
       }
 
-      let timestampValue: unknown;
+      let data: Record<string, unknown>;
       try {
-        timestampValue = (JSON.parse(trimmed) as Record<string, unknown>).timestamp;
+        data = JSON.parse(trimmed) as Record<string, unknown>;
       } catch {
         // Partially written or malformed lines are expected while a session streams.
         continue;
       }
 
-      if (typeof timestampValue !== 'string') {
-        continue;
+      // Identity comes from the first line that carries both, matching the
+      // previous first-valid-line extraction.
+      if (sessionId === undefined && typeof data.sessionId === 'string') {
+        if (typeof data.cwd === 'string') {
+          sessionId = data.sessionId;
+          projectPath = data.cwd;
+        }
       }
 
-      const parsedTime = new Date(timestampValue).getTime();
-      if (Number.isNaN(parsedTime)) {
-        continue;
+      for (const field of SESSION_TITLE_PRECEDENCE) {
+        const value = data[field];
+        if (typeof value === 'string' && value.trim()) {
+          titlesByRank.set(field, value.trim());
+        }
       }
 
-      earliestTime = Math.min(earliestTime, parsedTime);
-      latestTime = Math.max(latestTime, parsedTime);
+      if (typeof data.timestamp === 'string') {
+        const parsedTime = new Date(data.timestamp).getTime();
+        if (!Number.isNaN(parsedTime)) {
+          earliestTime = Math.min(earliestTime, parsedTime);
+          latestTime = Math.max(latestTime, parsedTime);
+        }
+      }
     }
   } catch {
     return {};
   }
 
-  if (!Number.isFinite(earliestTime) || !Number.isFinite(latestTime)) {
-    return {};
+  let title: string | undefined;
+  for (const field of SESSION_TITLE_PRECEDENCE) {
+    const ranked = titlesByRank.get(field);
+    if (ranked) {
+      title = ranked;
+      break;
+    }
   }
 
+  const hasSpan = Number.isFinite(earliestTime) && Number.isFinite(latestTime);
+
   return {
-    createdAt: new Date(earliestTime).toISOString(),
-    updatedAt: new Date(latestTime).toISOString(),
+    sessionId,
+    projectPath,
+    title,
+    createdAt: hasSpan ? new Date(earliestTime).toISOString() : undefined,
+    updatedAt: hasSpan ? new Date(latestTime).toISOString() : undefined,
   };
 }
 
@@ -1443,44 +1489,8 @@ const SESSION_TITLE_PRECEDENCE = ['customTitle', 'aiTitle'] as const;
  * the first.
  */
 export async function readSessionTitle(filePath: string): Promise<string | null> {
-  const titlesByRank = new Map<string, string>();
-
-  try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-    for await (const line of lineReader) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(trimmed) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-
-      for (const field of SESSION_TITLE_PRECEDENCE) {
-        const value = data[field];
-        if (typeof value === 'string' && value.trim()) {
-          titlesByRank.set(field, value.trim());
-        }
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  for (const field of SESSION_TITLE_PRECEDENCE) {
-    const title = titlesByRank.get(field);
-    if (title) {
-      return title;
-    }
-  }
-
-  return null;
+  const { title } = await readSessionTranscriptFacts(filePath);
+  return title ?? null;
 }
 
 /**

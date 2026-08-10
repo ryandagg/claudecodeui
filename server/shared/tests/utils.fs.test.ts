@@ -16,6 +16,7 @@ import {
   readSessionActivityTimestamps,
   readSessionTimestamps,
   readSessionTitle,
+  readSessionTranscriptFacts,
   readProviderSessionActiveModelChange,
   readProviderSkillMarkdownDefinition,
   validateWorkspacePath,
@@ -642,6 +643,43 @@ const writeTitleTranscript = async (dir: string, lines: unknown[]): Promise<stri
   await fs.writeFile(filePath, lines.map((line) => JSON.stringify(line)).join('\n'), 'utf8');
   return filePath;
 };
+
+test('readSessionTranscriptFacts gathers identity, title and span in one read', async () => {
+  const dir = await makeTempDir('transcript-facts');
+  try {
+    const filePath = await writeTitleTranscript(dir, [
+      { sessionId: 'sess-9', cwd: '/workspace/demo', type: 'user', timestamp: '2026-01-01T10:00:00.000Z' },
+      { type: 'ai-title', aiTitle: 'Generated' },
+      { type: 'custom-title', customTitle: 'the rename' },
+      { type: 'assistant', timestamp: '2026-01-01T12:00:00.000Z' },
+      { type: 'assistant', timestamp: '2026-01-01T11:00:00.000Z' },
+    ]);
+
+    assert.deepEqual(await readSessionTranscriptFacts(filePath), {
+      sessionId: 'sess-9',
+      projectPath: '/workspace/demo',
+      title: 'the rename',
+      createdAt: '2026-01-01T10:00:00.000Z',
+      updatedAt: '2026-01-01T12:00:00.000Z',
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTranscriptFacts reports no identity when the transcript lacks one', async () => {
+  const dir = await makeTempDir('transcript-facts-empty');
+  try {
+    const filePath = await writeTitleTranscript(dir, [{ type: 'user', text: 'no sessionId or cwd' }]);
+    const facts = await readSessionTranscriptFacts(filePath);
+    assert.equal(facts.sessionId, undefined);
+    assert.equal(facts.projectPath, undefined);
+
+    assert.deepEqual(await readSessionTranscriptFacts(path.join(dir, 'missing.jsonl')), {});
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
 
 test('readSessionTitle ranks a /rename above a generated title', async () => {
   const dir = await makeTempDir('title-precedence');

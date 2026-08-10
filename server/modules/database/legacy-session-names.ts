@@ -4,6 +4,7 @@ import { appendSessionCustomTitle, readSessionTitle } from '@/shared/utils.js';
 
 type LegacyNameRow = {
   session_id: string;
+  provider_session_id: string | null;
   custom_name: string;
   jsonl_path: string | null;
 };
@@ -49,11 +50,14 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
   const rows = db
     .prepare(
       `SELECT legacy_session_names.session_id AS session_id,
+              sessions.provider_session_id AS provider_session_id,
               legacy_session_names.custom_name AS custom_name,
               session_transcripts.jsonl_path AS jsonl_path
        FROM legacy_session_names
        LEFT JOIN session_transcripts
-         ON session_transcripts.session_id = legacy_session_names.session_id`
+         ON session_transcripts.session_id = legacy_session_names.session_id
+       LEFT JOIN sessions
+         ON sessions.session_id = legacy_session_names.session_id`
     )
     .all() as LegacyNameRow[];
 
@@ -82,7 +86,15 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
       continue;
     }
 
-    const wrote = await appendSessionCustomTitle(row.jsonl_path, row.session_id, name);
+    // The provider's own id, not the app-facing one. Every other line in the
+    // transcript carries the provider id, and a `custom-title` whose sessionId
+    // disagrees with its siblings is exactly the portability this pass exists
+    // to provide. Matches the live rename path in sessions.db.ts.
+    const wrote = await appendSessionCustomTitle(
+      row.jsonl_path,
+      row.provider_session_id ?? row.session_id,
+      name
+    );
     if (!wrote) {
       skipped += 1;
       continue;

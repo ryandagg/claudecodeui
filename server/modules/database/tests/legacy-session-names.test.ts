@@ -108,6 +108,35 @@ test('promotes an app-set name into the transcript and the derived row', async (
   });
 });
 
+test('writes the provider session id, not the app-facing one', async () => {
+  // Every other line in a transcript carries the provider's id. A custom-title
+  // whose sessionId disagrees with its siblings is exactly the portability this
+  // pass exists to provide, so an app-created session (app id != provider id)
+  // must still write the provider id.
+  await withIsolatedEnvironment(async ({ claudeHome }) => {
+    const db = getConnection();
+    const transcriptPath = path.join(claudeHome, 'projects', 'provider-id.jsonl');
+    await writeFile(transcriptPath, '', 'utf8');
+
+    db.prepare("INSERT OR IGNORE INTO projects (project_id, project_path) VALUES ('p','/tmp/demo')").run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, provider, provider_session_id, project_path)
+       VALUES ('app-allocated-id', 'claude', 'provider-native-id', '/tmp/demo')`,
+    ).run();
+    db.prepare("INSERT INTO session_transcripts (session_id, jsonl_path) VALUES ('app-allocated-id', ?)")
+      .run(transcriptPath);
+    db.exec(`CREATE TABLE IF NOT EXISTS legacy_session_names (
+      session_id TEXT PRIMARY KEY NOT NULL, custom_name TEXT NOT NULL)`);
+    db.prepare("INSERT INTO legacy_session_names VALUES ('app-allocated-id', 'a chosen name')").run();
+
+    await flushLegacySessionNamesToTranscripts(db);
+
+    const written = JSON.parse((await readFile(transcriptPath, 'utf8')).trim());
+    assert.equal(written.customTitle, 'a chosen name');
+    assert.equal(written.sessionId, 'provider-native-id');
+  });
+});
+
 test('leaves the transcript as valid JSONL', async () => {
   await withIsolatedEnvironment(async ({ claudeHome }) => {
     const transcriptPath = await seedLegacySession({

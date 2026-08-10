@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import {
   access,
+  open,
   appendFile,
   lstat,
   mkdir,
@@ -1515,11 +1516,25 @@ export async function appendSessionCustomTitle(
   }
 
   try {
-    const existing = await readFile(filePath, 'utf8');
-    const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
-    const line = JSON.stringify({ type: 'custom-title', customTitle: trimmedTitle, sessionId });
+    // Read only the final byte to decide whether a leading newline is needed.
+    // Transcripts reach multiple megabytes, and loading one entirely just to
+    // test its last character is wasteful.
+    const { size } = await stat(filePath);
+    let needsLeadingNewline = false;
 
-    await appendFile(filePath, `${separator}${line}\n`, 'utf8');
+    if (size > 0) {
+      const handle = await open(filePath, 'r');
+      try {
+        const tail = Buffer.alloc(1);
+        await handle.read(tail, 0, 1, size - 1);
+        needsLeadingNewline = tail.toString('utf8') !== '\n';
+      } finally {
+        await handle.close();
+      }
+    }
+
+    const line = JSON.stringify({ type: 'custom-title', customTitle: trimmedTitle, sessionId });
+    await appendFile(filePath, `${needsLeadingNewline ? '\n' : ''}${line}\n`, 'utf8');
     return true;
   } catch {
     // A session with no transcript yet (or an unreadable one) keeps its rename

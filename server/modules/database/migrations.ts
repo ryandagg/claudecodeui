@@ -60,6 +60,27 @@ const migrateLegacySessionNames = (db: Database): void => {
 
   if (hasSessionsTable) {
     console.log('Running migration: Merging session_names into sessions');
+
+    // A name living only in session_names would otherwise be dropped: the
+    // promotion pass reads `sessions.custom_name`, which this merge no longer
+    // populates. Hand it over the same way the split does so it still reaches
+    // the transcript.
+    const legacyNameColumns = getTableInfo(db, 'session_names').map((column) => column.name);
+    if (legacyNameColumns.includes('custom_name')) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS legacy_session_names (
+          session_id TEXT PRIMARY KEY NOT NULL,
+          custom_name TEXT NOT NULL
+        )
+      `);
+      db.exec(`
+        INSERT INTO legacy_session_names (session_id, custom_name)
+        SELECT session_id, custom_name FROM session_names
+        WHERE custom_name IS NOT NULL AND trim(custom_name) <> ''
+        ON CONFLICT(session_id) DO NOTHING
+      `);
+    }
+
     // Identity only. `sessions` no longer has `custom_name` or `updated_at` —
     // both are transcript-derived now and are restored by the first scan — and
     // naming them here fails outright on a database old enough to still have a

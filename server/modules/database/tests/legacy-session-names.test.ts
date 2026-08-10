@@ -180,6 +180,23 @@ const skipCases: Array<{ label: string; legacyName: string; transcriptLines: unk
     legacyName: 'Already Derived',
     transcriptLines: [{ type: 'ai-title', aiTitle: 'Already Derived' }],
   },
+  {
+    // The old synchronizer accepted last-prompt as a name, so prompt text
+    // ended up in custom_name for a large share of sessions. Promoting those
+    // would pin raw prompts into transcripts as permanent titles.
+    label: 'a name seeded from a last-prompt line',
+    legacyName: 'what does this function do?',
+    transcriptLines: [{ type: 'last-prompt', lastPrompt: 'what does this function do?' }],
+  },
+  {
+    // The old code truncated, so a stored name is often a prefix of the value
+    // it came from rather than an exact match.
+    label: 'a truncated prefix of a generated value',
+    legacyName: 'Can you set several teamates on a research j',
+    transcriptLines: [
+      { type: 'last-prompt', lastPrompt: 'Can you set several teamates on a research journey for this issue' },
+    ],
+  },
 ];
 
 for (const skipCase of skipCases) {

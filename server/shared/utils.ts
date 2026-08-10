@@ -1494,6 +1494,48 @@ export async function readSessionTitle(filePath: string): Promise<string | null>
 }
 
 /**
+ * Every label a transcript could have supplied, not just the winning one.
+ *
+ * The old synchronizer seeded `sessions.custom_name` from whichever of
+ * `custom-title`, `ai-title` or `last-prompt` it found first, or from
+ * `history.jsonl`'s `display`. Recognising a stored name as one of those is
+ * what distinguishes a label the app generated from one a person typed.
+ */
+export async function readSessionTitleCandidates(filePath: string): Promise<Set<string>> {
+  const candidates = new Set<string>();
+
+  try {
+    const fileStream = fs.createReadStream(filePath);
+    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of lineReader) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      for (const field of ['customTitle', 'aiTitle', 'lastPrompt'] as const) {
+        const value = data[field];
+        if (typeof value === 'string' && value.trim()) {
+          candidates.add(value.trim());
+        }
+      }
+    }
+  } catch {
+    return candidates;
+  }
+
+  return candidates;
+}
+
+/**
  * Records a rename into the transcript itself, as Claude's `/rename` does.
  *
  * Writing here rather than only into the app database makes a rename portable:

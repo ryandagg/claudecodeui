@@ -1,6 +1,14 @@
+import path from 'node:path';
+
 import type { Database } from 'better-sqlite3';
 
-import { appendSessionCustomTitle, readSessionTitle } from '@/shared/utils.js';
+
+import {
+  appendSessionCustomTitle,
+  buildLookupMap,
+  getClaudeHome,
+  readSessionTitleCandidates,
+} from '@/shared/utils.js';
 
 type LegacyNameRow = {
   session_id: string;
@@ -65,6 +73,14 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
     'UPDATE session_transcripts SET provider_name = ? WHERE session_id = ?'
   );
 
+  // history.jsonl records the raw first prompt, which the old synchronizer used
+  // as a name. Read once rather than per row.
+  const displayBySessionId = await buildLookupMap(
+    path.join(getClaudeHome(), 'history.jsonl'),
+    'sessionId',
+    'display'
+  );
+
   let promoted = 0;
   let skipped = 0;
 
@@ -78,10 +94,22 @@ export async function flushLegacySessionNamesToTranscripts(db: Database): Promis
       continue;
     }
 
-    // Already recoverable from the transcript — writing it again would only add
-    // a redundant line to a file this app does not own.
-    const derivedTitle = await readSessionTitle(row.jsonl_path);
-    if (derivedTitle === name) {
+    // The decisive test: is this a name a person typed, or one the app
+    // generated? The old synchronizer seeded custom_name from the first prompt,
+    // an ai-title, or a last-prompt, so a stored value matching any of those is
+    // not a rename and must not be written into the transcript. Prefix matching
+    // covers the truncation the old code applied. Skipping costs nothing
+    // visually — the sidebar falls back to the same string.
+    const candidates = await readSessionTitleCandidates(row.jsonl_path);
+    const displayValue = displayBySessionId.get(row.provider_session_id ?? row.session_id);
+    if (displayValue) {
+      candidates.add(displayValue.trim());
+    }
+
+    const wasGenerated = [...candidates].some(
+      (candidate) => candidate === name || candidate.startsWith(name)
+    );
+    if (wasGenerated) {
       skipped += 1;
       continue;
     }

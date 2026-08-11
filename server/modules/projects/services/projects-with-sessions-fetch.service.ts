@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
-import { sessionSynchronizerService } from '@/modules/providers/index.js';
+import { sessionSynchronizerService, readFirstUserMessagePreview } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
@@ -121,23 +121,43 @@ function normalizeSessionPagination(options: SessionPaginationOptions = {}): { l
   };
 }
 
-function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
+/**
+ * Shapes one DB row into the sidebar payload.
+ *
+ * When a session has no cached title (`custom_name` empty — no `custom-title`
+ * or `ai-title` on disk), `summary` is filled from a render-only preview of the
+ * transcript's first user message. This is never persisted: it is recomputed on
+ * each read, so it cannot flip-flop the way a stored fabricated name did, and it
+ * keeps the DB free of names that have no matching line in the transcript.
+ *
+ * The preview only reads the head of the file, and only for un-named rows, so a
+ * page of already-named sessions does no extra I/O.
+ */
+async function mapSessionRowToSummary(row: SessionRepositoryRow): Promise<SessionSummary> {
+  const cachedName = row.custom_name?.trim() ?? '';
+  const jsonlPath = row.jsonl_path ?? null;
+  const summary = cachedName || (jsonlPath ? await readFirstUserMessagePreview(jsonlPath) : '');
+
   return {
     id: row.session_id,
     provider: row.provider,
-    summary: row.custom_name || '',
+    summary,
     messageCount: 0,
     lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
     starred_at: row.starred_at ?? null,
-    jsonlPath: row.jsonl_path ?? null,
+    jsonlPath,
   };
 }
 
-function readProjectSessionsIncludingArchived(projectPath: string): ProjectSessionsPageResult {
+function mapSessionRowsToSummaries(rows: SessionRepositoryRow[]): Promise<SessionSummary[]> {
+  return Promise.all(rows.map(mapSessionRowToSummary));
+}
+
+async function readProjectSessionsIncludingArchived(projectPath: string): Promise<ProjectSessionsPageResult> {
   const rows = sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath) as SessionRepositoryRow[];
 
   return {
-    sessions: rows.map(mapSessionRowToSummary),
+    sessions: await mapSessionRowsToSummaries(rows),
     total: rows.length,
     hasMore: false,
   };
@@ -146,10 +166,10 @@ function readProjectSessionsIncludingArchived(projectPath: string): ProjectSessi
 /**
  * Reads one paginated project session slice from the DB and groups rows by provider.
  */
-function readProjectSessionsPageByPath(
+async function readProjectSessionsPageByPath(
   projectPath: string,
   options: SessionPaginationOptions = {},
-): ProjectSessionsPageResult {
+): Promise<ProjectSessionsPageResult> {
   const pagination = normalizeSessionPagination(options);
   const rows = sessionsDb.getSessionsByProjectPathPage(
     projectPath,
@@ -159,7 +179,7 @@ function readProjectSessionsPageByPath(
   const total = sessionsDb.countSessionsByProjectPath(projectPath);
 
   return {
-    sessions: rows.map(mapSessionRowToSummary),
+    sessions: await mapSessionRowsToSummaries(rows),
     total,
     hasMore: pagination.offset + rows.length < total,
   };
@@ -218,7 +238,7 @@ export async function getProjectsWithSessions(
         ? row.custom_project_name
         : await generateDisplayName(path.basename(projectPath) || projectPath, projectPath);
 
-    const sessionsPage = readProjectSessionsPageByPath(projectPath, {
+    const sessionsPage = await readProjectSessionsPageByPath(projectPath, {
       limit: options.sessionsLimit,
       offset: options.sessionsOffset,
     });
@@ -273,7 +293,7 @@ export async function getArchivedProjectsWithSessions(
         ? row.custom_project_name
         : await generateDisplayName(path.basename(row.project_path) || row.project_path, row.project_path);
 
-    const sessionsPage = readProjectSessionsIncludingArchived(row.project_path);
+    const sessionsPage = await readProjectSessionsIncludingArchived(row.project_path);
 
     archivedProjects.push({
       projectId: row.project_id,
@@ -308,7 +328,7 @@ export async function getProjectSessionsPage(
     });
   }
 
-  const sessionsPage = readProjectSessionsPageByPath(projectRow.project_path, options);
+  const sessionsPage = await readProjectSessionsPageByPath(projectRow.project_path, options);
   return {
     projectId: projectRow.project_id,
     sessions: sessionsPage.sessions,

@@ -3,7 +3,6 @@ import path from 'node:path';
 import { sessionsDb } from '@/modules/database/index.js';
 import {
   getClaudeHome,
-  buildLookupMap,
   findFilesRecursivelyModifiedAfter,
   normalizeSessionName,
   readFileTimestamps,
@@ -45,7 +44,6 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    * Scans ~/.claude/projects and upserts discovered sessions into DB.
    */
   async synchronize(since?: Date): Promise<number> {
-    const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
     const files = await findFilesRecursivelyModifiedAfter(
       path.join(this.claudeHome, 'projects'),
       '.jsonl',
@@ -58,7 +56,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
         continue;
       }
 
-      const parsed = await this.processSessionFile(filePath, nameMap);
+      const parsed = await this.processSessionFile(filePath);
       if (!parsed) {
         continue;
       }
@@ -92,8 +90,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
-    const parsed = await this.processSessionFile(filePath, nameMap);
+    const parsed = await this.processSessionFile(filePath);
     if (!parsed) {
       return null;
     }
@@ -116,8 +113,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    * Extracts session metadata from one Claude JSONL session file.
    */
   private async processSessionFile(
-    filePath: string,
-    nameMap: Map<string, string>
+    filePath: string
   ): Promise<ParsedSession | null> {
     // One pass for identity, title and activity span. The watcher fires on
     // every append to an active transcript, so scanning once per fact would
@@ -127,22 +123,25 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    // The transcript wins: it carries the user's own /rename. history.jsonl's
-    // `display` is only the first prompt (literally "/rename foo" when the
-    // rename was typed as a slash command), so it is the last resort rather
-    // than the first choice it used to be.
+    // Only a real transcript title is cached as the session name: a user's
+    // `/rename` (`custom-title`) or Claude's own `ai-title`. Both live in the
+    // transcript, so the cached value always matches what `claude --resume`
+    // shows and can never disagree with it.
     //
-    // Deliberately no "keep the name already in the database" short-circuit.
-    // That guard existed to stop sync overwriting a user's rename with a
-    // derived title, back when the name was app-owned. Renames now live in the
-    // transcript, so the guard only pinned whichever label was recorded first
-    // and prevented the transcript from ever correcting it.
-    const sessionName = facts.title ?? nameMap.get(facts.sessionId);
+    // Deliberately no fallback to history.jsonl's `display` or a static
+    // placeholder. `display` is only the first prompt — literally "/model" or
+    // "[Pasted text …]" for many sessions — so caching it fabricates a name
+    // that is nowhere in the transcript and then flip-flops on every sync.
+    // A session with no title stays unnamed here (provider_name NULL); the
+    // sidebar derives a first-message preview at read time instead.
+    const sessionName = facts.title
+      ? normalizeSessionName(facts.title, '')
+      : undefined;
 
     return {
       sessionId: facts.sessionId,
       projectPath: facts.projectPath,
-      sessionName: normalizeSessionName(sessionName, 'Untitled Claude Session'),
+      sessionName: sessionName || undefined,
       createdAt: facts.createdAt,
       updatedAt: facts.updatedAt,
     };

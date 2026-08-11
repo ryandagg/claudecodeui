@@ -146,15 +146,31 @@ export const sessionsDb = {
   ): void {
     const db = getConnection();
 
+    // `provider_name` is authoritative, not additive: the caller re-derives it
+    // from the transcript (a `custom-title`/`ai-title` line, or nothing), so a
+    // NULL here means "this transcript carries no title" and must clear any
+    // stale value — including a fabricated placeholder written by an earlier
+    // build. Any real name lives in the transcript and is recovered on the
+    // next scan, so clearing is never lossy. `jsonl_path` and the timestamp
+    // span stay additive (COALESCE): different callers know different subsets,
+    // and none of them should be able to blank a path or span with NULL.
+    //
+    // The WHERE guard makes the update a no-op when nothing changed, so the
+    // idempotent re-emit of a stable `ai-title` (Claude rewrites the same line
+    // on every resume) touches zero rows instead of churning `indexed_at`.
     db.prepare(
       `INSERT INTO session_transcripts (session_id, provider_name, jsonl_path, first_message_at, last_message_at, indexed_at)
        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(session_id) DO UPDATE SET
-         provider_name = COALESCE(excluded.provider_name, session_transcripts.provider_name),
+         provider_name = excluded.provider_name,
          jsonl_path = COALESCE(excluded.jsonl_path, session_transcripts.jsonl_path),
          first_message_at = COALESCE(excluded.first_message_at, session_transcripts.first_message_at),
          last_message_at = COALESCE(excluded.last_message_at, session_transcripts.last_message_at),
-         indexed_at = CURRENT_TIMESTAMP`
+         indexed_at = CURRENT_TIMESTAMP
+       WHERE session_transcripts.provider_name IS NOT excluded.provider_name
+          OR session_transcripts.jsonl_path IS NOT COALESCE(excluded.jsonl_path, session_transcripts.jsonl_path)
+          OR session_transcripts.first_message_at IS NOT COALESCE(excluded.first_message_at, session_transcripts.first_message_at)
+          OR session_transcripts.last_message_at IS NOT COALESCE(excluded.last_message_at, session_transcripts.last_message_at)`
     ).run(
       sessionId,
       transcript.providerName ?? null,

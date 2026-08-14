@@ -118,6 +118,63 @@ export async function readClaudeModel(): Promise<string | null> {
     : null;
 }
 
+/**
+ * The subset of `~/.claude/settings.json` the app needs to recompute Claude
+ * Code's auto-compaction threshold (see modules/compaction/auto-compact.ts).
+ *
+ * Everything here is READ-ONLY: settings.json is the source of truth the CLI
+ * and terminal `claude` also read, and the app never mirrors it. Values are
+ * returned in raw settings vocabulary; the compaction module owns the parsing.
+ */
+export interface ClaudeAutoCompactConfig {
+  /** The `env` block, string-coerced (the layer the CLI reads these keys from). */
+  env: Record<string, string>;
+  /** The `autoCompactWindow` setting (positive integer) or null when absent/invalid. */
+  autoCompactWindow: number | null;
+  /** The top-level default `model`, used to resolve the fallback context window. */
+  model: string | null;
+}
+
+/**
+ * Reads the auto-compaction-relevant slice of the user settings file in a
+ * single pass — the `env` block plus the `autoCompactWindow` and `model` keys.
+ * A missing file or malformed JSON degrades to empty defaults rather than
+ * throwing, so a token-budget update can never break a live run.
+ */
+export async function readClaudeAutoCompactConfig(): Promise<ClaudeAutoCompactConfig> {
+  let settings: Record<string, unknown>;
+  try {
+    settings = await readJsonConfig(userSettingsPath());
+  } catch {
+    // readJsonConfig returns {} for a missing file but rethrows on malformed
+    // JSON. Neither should break a token-budget update, so degrade to empty
+    // defaults — callers then fall back to the model context limit.
+    return { env: {}, autoCompactWindow: null, model: null };
+  }
+
+  const envRecord = readObjectRecord(settings.env) ?? {};
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(envRecord)) {
+    if (typeof key === 'string' && key.length > 0) {
+      env[key] = typeof value === 'string' ? value : String(value);
+    }
+  }
+
+  const rawWindow = settings.autoCompactWindow;
+  const parsedWindow = typeof rawWindow === 'number'
+    ? rawWindow
+    : typeof rawWindow === 'string'
+      ? Number.parseInt(rawWindow, 10)
+      : Number.NaN;
+  const autoCompactWindow = Number.isFinite(parsedWindow) && parsedWindow > 0 ? parsedWindow : null;
+
+  const model = typeof settings.model === 'string' && settings.model.trim()
+    ? settings.model.trim()
+    : null;
+
+  return { env, autoCompactWindow, model };
+}
+
 function dedupe(items: string[]): string[] {
   return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
 }

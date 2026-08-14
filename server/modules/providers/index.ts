@@ -5,3 +5,5 @@ export { providerMcpService } from './services/mcp.service.js';
 
 export { initializeSessionsWatcher } from './services/sessions-watcher.service.js';
 export { closeSessionsWatcher } from './services/sessions-watcher.service.js';
+export { readClaudeAutoCompactConfig } from './list/claude/claude-settings.provider.js';
+export type { ClaudeAutoCompactConfig } from './list/claude/claude-settings.provider.js';

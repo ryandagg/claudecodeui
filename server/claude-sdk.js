@@ -19,6 +19,7 @@ import os from 'os';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+import { resolveAutoCompactContext } from './modules/compaction/auto-compact-context.js';
 import { CLAUDE_FALLBACK_MODELS } from './modules/providers/list/claude/claude-models.provider.js';
 import { providerModelsService } from './modules/providers/services/provider-models.service.js';
 import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
@@ -556,6 +557,11 @@ async function queryClaudeSDK(command, options = {}, ws) {
       options.model,
     );
 
+    // Auto-compaction threshold is static for the run (window/pct/reserves/model
+    // are all fixed once the model is resolved), so compute it once here and
+    // stamp it onto every token-budget update the loop emits below.
+    const autoCompactContext = await resolveAutoCompactContext(resolvedModel || options.model || null);
+
     let effortModels = CLAUDE_FALLBACK_MODELS;
     try {
       effortModels = (await providerModelsService.getProviderModels('claude')).models;
@@ -763,10 +769,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
         ws.send(msg);
       }
 
-      // Extract and send token budget updates from assistant/result usage payloads
+      // Extract and send token budget updates from assistant/result usage payloads.
+      // Stamp on the run's auto-compact threshold so the UI can render "% used
+      // before auto-compaction" instead of a raw token count.
       const tokenBudgetData = extractTokenBudget(message);
       if (tokenBudgetData) {
-        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        const tokenBudget = {
+          ...tokenBudgetData,
+          autoCompactThreshold: autoCompactContext.autoCompactThreshold,
+          contextWindow: autoCompactContext.contextWindow,
+        };
+        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       }
     }
 

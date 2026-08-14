@@ -34,6 +34,7 @@ import {
     resolveToolApproval,
     getPendingApprovalsForSession,
 } from './claude-sdk.js';
+import { resolveAutoCompactContext } from './modules/compaction/auto-compact-context.js';
 import {
     stripAnsiSequences,
     normalizeDetectedUrl,
@@ -1511,6 +1512,9 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
         let outputTokens = 0;
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
+        // Model of the latest assistant turn, used to resolve the auto-compaction
+        // threshold below (only matters when no explicit window env/setting wins).
+        let sessionModel = null;
 
         // Find the latest assistant message with usage data (scan from end)
         for (let i = lines.length - 1; i >= 0; i--) {
@@ -1527,6 +1531,7 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
                     cacheCreationTokens = readUsageNumber(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? usage.cacheCreationTokens);
                     inputTokens = directInputTokens + cacheReadTokens + cacheCreationTokens;
                     outputTokens = readUsageNumber(usage.output_tokens ?? usage.outputTokens);
+                    sessionModel = entry.message?.model ?? null;
 
                     break; // Stop after finding the latest assistant message
                 }
@@ -1539,6 +1544,21 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
         const totalUsed = inputTokens + outputTokens;
         const cacheTokens = cacheReadTokens + cacheCreationTokens;
 
+        // Resolve Claude Code's real auto-compaction threshold so the initial
+        // fetch carries the same percentage the live WebSocket budget does (the
+        // button would otherwise show a raw count until the first stream update).
+        // resolveAutoCompactContext already degrades to null on a settings read
+        // failure; guard anyway so a resolution error can't turn this into a 500.
+        let autoCompactThreshold = null;
+        let resolvedContextWindow = null;
+        try {
+            const autoCompactContext = await resolveAutoCompactContext(sessionModel);
+            autoCompactThreshold = autoCompactContext.autoCompactThreshold;
+            resolvedContextWindow = autoCompactContext.contextWindow;
+        } catch (thresholdError) {
+            // Leave both null — the client falls back to a raw token count.
+        }
+
         res.json({
             used: totalUsed,
             total: contextWindow,
@@ -1547,6 +1567,8 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
             cacheReadTokens,
             cacheCreationTokens,
             cacheTokens,
+            autoCompactThreshold,
+            contextWindow: resolvedContextWindow,
             breakdown: {
                 input: inputTokens,
                 output: outputTokens

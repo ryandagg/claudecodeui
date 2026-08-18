@@ -115,6 +115,7 @@ function ChatInterface({
     searchWindow,
     searchNavPending,
     dismissSearchWindow,
+    revealMessage,
     loadEarlierMessages,
     loadAllMessages,
     allMessagesLoaded,
@@ -155,8 +156,13 @@ function ChatInterface({
     onNavigateToSession?.(sessionId);
   }, [setCurrentSessionId, onSessionEstablished, onNavigateToSession]);
 
-  // Shell-style up/down prompt history over this session's user messages.
-  const { handleHistoryKeyDown, resetHistory, bindSetInput } = useInputHistory(chatMessages);
+  // Shell-style up/down prompt history over this session's user messages. Each
+  // recalled message is scrolled into view and flashed (like a search hit);
+  // restoring the draft returns to the newest message.
+  const { handleHistoryKeyDown, resetHistory, bindSetInput } = useInputHistory(chatMessages, {
+    onReveal: revealMessage,
+    onScrollToBottom: scrollToBottom,
+  });
 
   const {
     input,

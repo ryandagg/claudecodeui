@@ -310,6 +310,15 @@ export function useChatSessionState({
    */
   const searchNavGenerationRef = useRef(0);
   const searchNavTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /**
+   * Reveal (prompt-history ArrowUp/Down) has its own timers/generation, kept
+   * separate from search so the two flows can't cancel each other's scroll.
+   * `revealFlashedElementRef` holds the element currently wearing the flash
+   * class, so a rapid next reveal can strip it before flashing the new target.
+   */
+  const revealTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const revealGenerationRef = useRef(0);
+  const revealFlashedElementRef = useRef<HTMLElement | null>(null);
   const _isLoadingSessionRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
@@ -627,6 +636,11 @@ export function useChatSessionState({
       setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
     }
     setSearchWindow(null);
+    // Abandon any in-flight prompt-history reveal from the previous session.
+    revealGenerationRef.current += 1;
+    for (const timer of revealTimersRef.current) clearTimeout(timer);
+    revealTimersRef.current = [];
+    revealFlashedElementRef.current = null;
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
     isUserScrolledUpRef.current = false;
@@ -1005,6 +1019,10 @@ export function useChatSessionState({
     cancelSearchNavigation();
     clearSearchHighlights();
     highlightedQueryRef.current = null;
+    revealGenerationRef.current += 1;
+    for (const timer of revealTimersRef.current) clearTimeout(timer);
+    revealTimersRef.current = [];
+    revealFlashedElementRef.current = null;
   }, [cancelSearchNavigation]);
 
   // Initial token usage fetch for providers with file-backed usage data.
@@ -1183,6 +1201,99 @@ export function useChatSessionState({
     setVisibleMessageCount((prev) => prev + 100);
   }, []);
 
+  /**
+   * Scroll a specific transcript message into view and flash it — the same
+   * visual as revealing a search hit, but driven by prompt-history ArrowUp/Down
+   * rather than a search click. Reuses the search locator/flash primitives, but
+   * deliberately skips the search-only UX: no "jumping to result" spinner, no
+   * amber window banner, and no cmd+F term highlighting.
+   *
+   * Unlike search's `searchWindow` (a narrow ±25 slice that hides the rest of
+   * the conversation behind a banner), this only ever *grows* the normal render
+   * window so the target mounts while the live tail stays put — the recalled
+   * text is still editable in the composer, so the conversation shouldn't
+   * visibly collapse around it.
+   */
+  const revealMessage = useCallback(
+    (target: { uuid?: string; timestamp?: string | number | Date }) => {
+      const uuid = typeof target.uuid === 'string' ? target.uuid : undefined;
+      const timestamp =
+        target.timestamp === undefined || target.timestamp === null
+          ? undefined
+          : String(target.timestamp);
+      if (!uuid && !timestamp) return;
+      const searchTarget: SearchTarget = { uuid, timestamp };
+
+      // Don't scroll on top of an in-flight search jump.
+      if (searchScrollActiveRef.current) return;
+
+      // Supersede any previous reveal still retrying/flashing.
+      revealGenerationRef.current += 1;
+      const generation = revealGenerationRef.current;
+      const isStale = () => revealGenerationRef.current !== generation;
+      for (const timer of revealTimersRef.current) clearTimeout(timer);
+      revealTimersRef.current = [];
+
+      const delay = (ms: number) =>
+        new Promise<void>((resolve) => {
+          revealTimersRef.current.push(setTimeout(resolve, ms));
+        });
+
+      // Grow the render window (never shrink) so an older target mounts while
+      // the newest messages stay rendered. Recent recalls are already inside the
+      // default window, so this is usually a no-op.
+      const targetIndex = findTargetMessageIndex(chatMessages, searchTarget);
+      if (targetIndex >= 0 && !searchWindow) {
+        const fromEnd = chatMessages.length - targetIndex;
+        const needed = fromEnd + MESSAGES_PER_PAGE;
+        setVisibleMessageCount((prev) => (needed > prev ? needed : prev));
+      }
+
+      const flash = (element: HTMLElement) => {
+        if (revealFlashedElementRef.current && revealFlashedElementRef.current !== element) {
+          revealFlashedElementRef.current.classList.remove('search-highlight-flash');
+        }
+        // Restart the animation if this element is flashed again mid-cycle.
+        element.classList.remove('search-highlight-flash');
+        void element.offsetWidth;
+        element.classList.add('search-highlight-flash');
+        revealFlashedElementRef.current = element;
+        revealTimersRef.current.push(
+          setTimeout(() => {
+            element.classList.remove('search-highlight-flash');
+            if (revealFlashedElementRef.current === element) revealFlashedElementRef.current = null;
+          }, 4000),
+        );
+      };
+
+      const findAndScroll = async (retriesLeft: number): Promise<void> => {
+        if (isStale()) return;
+        const container = scrollContainerRef.current;
+        if (!container) return;
+
+        const found = locateTargetElement(container, searchTarget);
+        if (!found) {
+          if (retriesLeft > 0) {
+            await delay(80);
+            return findAndScroll(retriesLeft - 1);
+          }
+          return;
+        }
+
+        found.element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        flash(found.element);
+      };
+
+      // Let a widened window commit before locating the element.
+      void (async () => {
+        await delay(targetIndex >= 0 && !searchWindow ? 60 : 0);
+        if (isStale()) return;
+        await findAndScroll(5);
+      })();
+    },
+    [chatMessages, searchWindow],
+  );
+
   return {
     chatMessages,
     addMessage,
@@ -1206,6 +1317,7 @@ export function useChatSessionState({
     searchWindow,
     searchNavPending,
     dismissSearchWindow,
+    revealMessage,
     loadEarlierMessages,
     loadAllMessages,
     allMessagesLoaded,

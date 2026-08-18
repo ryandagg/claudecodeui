@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { closeConnection } from '@/modules/database/connection.js';
+import { closeConnection, getConnection } from '@/modules/database/connection.js';
 import { initializeDatabase } from '@/modules/database/init-db.js';
 import { searchIndexDb, toFtsMatchLiteral } from '@/modules/database/repositories/search-index.db.js';
 import { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
@@ -60,7 +60,10 @@ test('session archive queries hide archived rows from active project views', asy
   });
 });
 
-test('createSession reactivates archived rows when the session becomes active again', async () => {
+test('createSession leaves an archived session archived when its transcript changes', async () => {
+  // Regression: sync used to write `isArchived = 0` in its upsert, so merely
+  // appending to an archived session's transcript silently un-archived it.
+  // Archive state is owned by the user and no synchronizer may write it.
   await withIsolatedDatabase(() => {
     sessionsDb.createSession('session-reused', 'claude', '/workspace/demo-project', 'First Name');
     sessionsDb.updateSessionIsArchived('session-reused', true);
@@ -69,13 +72,58 @@ test('createSession reactivates archived rows when the session becomes active ag
 
     const activeSessions = sessionsDb.getAllSessions();
     const archivedSessions = sessionsDb.getArchivedSessions();
-    const restoredSession = sessionsDb.getSessionById('session-reused');
+    const session = sessionsDb.getSessionById('session-reused');
 
-    assert.equal(activeSessions.length, 1);
-    assert.equal(activeSessions[0]?.session_id, 'session-reused');
-    assert.equal(activeSessions[0]?.custom_name, 'Updated Name');
-    assert.equal(archivedSessions.length, 0);
-    assert.equal(restoredSession?.isArchived, 0);
+    assert.equal(activeSessions.length, 0, 'an archived session must not reappear in active lists');
+    assert.equal(archivedSessions.length, 1);
+    assert.equal(session?.isArchived, 1);
+    // The provider's title is derived, so it still refreshes.
+    assert.equal(session?.custom_name, 'Updated Name');
+  });
+});
+
+test('createSession preserves a starred session across re-sync', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createSession('session-starred', 'claude', '/workspace/demo-project', 'Name');
+    sessionsDb.toggleSessionStar('session-starred');
+    const starredAt = sessionsDb.getSessionById('session-starred')?.starred_at;
+    assert.ok(starredAt, 'precondition: session is starred');
+
+    sessionsDb.createSession('session-starred', 'claude', '/workspace/demo-project', 'Name');
+
+    assert.equal(sessionsDb.getSessionById('session-starred')?.starred_at, starredAt);
+  });
+});
+
+test('transcript-derived data can be rebuilt without losing owned state', async () => {
+  // The property the schema split exists for: derived rows are disposable.
+  await withIsolatedDatabase(() => {
+    const db = getConnection();
+    sessionsDb.createSession('rebuild-me', 'claude', '/workspace/demo-project', 'Derived Name');
+    sessionsDb.updateSessionIsArchived('rebuild-me', true);
+    sessionsDb.toggleSessionStar('rebuild-me');
+
+    db.exec('DELETE FROM session_transcripts');
+
+    const session = sessionsDb.getSessionById('rebuild-me');
+    assert.equal(session?.isArchived, 1, 'archive flag survives a derived-data wipe');
+    assert.ok(session?.starred_at, 'star survives a derived-data wipe');
+
+    // Re-deriving restores the transcript facts.
+    sessionsDb.createSession('rebuild-me', 'claude', '/workspace/demo-project', 'Derived Name');
+    assert.equal(sessionsDb.getSessionById('rebuild-me')?.custom_name, 'Derived Name');
+  });
+});
+
+test('the session_rows view rejects writes aimed at owned state', async () => {
+  // Owned state is unreachable through the read shape by construction.
+  await withIsolatedDatabase(() => {
+    const db = getConnection();
+    sessionsDb.createSession('view-guard', 'claude', '/workspace/demo-project', 'Name');
+    assert.throws(
+      () => db.exec('UPDATE session_rows SET isArchived = 0'),
+      /cannot modify session_rows/i,
+    );
   });
 });
 

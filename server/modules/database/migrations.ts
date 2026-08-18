@@ -7,6 +7,8 @@ import {
   PROJECTS_TABLE_SCHEMA_SQL,
   PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
+  SESSION_ROWS_VIEW_SQL,
+  SESSION_TRANSCRIPTS_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
   USER_SETTINGS_TABLE_SCHEMA_SQL,
   VAPID_KEYS_TABLE_SCHEMA_SQL,
@@ -58,21 +60,42 @@ const migrateLegacySessionNames = (db: Database): void => {
 
   if (hasSessionsTable) {
     console.log('Running migration: Merging session_names into sessions');
+
+    // A name living only in session_names would otherwise be dropped: the
+    // promotion pass reads `sessions.custom_name`, which this merge no longer
+    // populates. Hand it over the same way the split does so it still reaches
+    // the transcript.
+    const legacyNameColumns = getTableInfo(db, 'session_names').map((column) => column.name);
+    if (legacyNameColumns.includes('custom_name')) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS legacy_session_names (
+          session_id TEXT PRIMARY KEY NOT NULL,
+          custom_name TEXT NOT NULL
+        )
+      `);
+      db.exec(`
+        INSERT INTO legacy_session_names (session_id, custom_name)
+        SELECT session_id, custom_name FROM session_names
+        WHERE custom_name IS NOT NULL AND trim(custom_name) <> ''
+        ON CONFLICT(session_id) DO NOTHING
+      `);
+    }
+
+    // Identity only. `sessions` no longer has `custom_name` or `updated_at` —
+    // both are transcript-derived now and are restored by the first scan — and
+    // naming them here fails outright on a database old enough to still have a
+    // session_names table.
     db.exec(`
-      INSERT INTO sessions (session_id, provider, custom_name, created_at, updated_at)
+      INSERT INTO sessions (session_id, provider, created_at)
       SELECT
         session_id,
         COALESCE(provider, 'claude'),
-        custom_name,
-        COALESCE(created_at, CURRENT_TIMESTAMP),
-        COALESCE(updated_at, CURRENT_TIMESTAMP)
+        COALESCE(created_at, CURRENT_TIMESTAMP)
       FROM session_names
       WHERE true
       ON CONFLICT(session_id) DO UPDATE SET
         provider = excluded.provider,
-        custom_name = COALESCE(excluded.custom_name, sessions.custom_name),
-        created_at = COALESCE(sessions.created_at, excluded.created_at),
-        updated_at = COALESCE(excluded.updated_at, sessions.updated_at)
+        created_at = COALESCE(sessions.created_at, excluded.created_at)
     `);
     db.exec('DROP TABLE session_names');
     return;
@@ -258,14 +281,14 @@ const rebuildSessionsTableWithProjectSchema = (db: Database): void => {
     !columnNames.includes('provider');
 
   if (!shouldRebuild) {
-    addColumnToTableIfNotExists(db, 'sessions', columnNames, 'jsonl_path', 'TEXT');
+    // `jsonl_path`, `updated_at` and `custom_name` are deliberately absent:
+    // they moved to session_transcripts. Re-adding them here would make every
+    // startup add the columns only for the split below to drop them again.
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'isArchived', 'BOOLEAN DEFAULT 0');
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'starred_at', 'DATETIME DEFAULT NULL');
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'created_at', 'DATETIME');
-    addColumnToTableIfNotExists(db, 'sessions', columnNames, 'updated_at', 'DATETIME');
     db.exec('UPDATE sessions SET isArchived = COALESCE(isArchived, 0)');
     db.exec('UPDATE sessions SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)');
-    db.exec('UPDATE sessions SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)');
     return;
   }
 
@@ -423,6 +446,88 @@ const ensureProjectsForSessionPaths = (db: Database): void => {
   `);
 };
 
+/**
+ * Splits `sessions` into app-owned identity and disposable derived data.
+ *
+ * Before this migration a single row mixed both, so any code path that
+ * refreshed transcript-derived columns also rewrote `isArchived`,
+ * `custom_name` and `starred_at` — state that exists nowhere on disk. That is
+ * what silently un-archived sessions and blocked rebuilding the cache at all.
+ *
+ * Existing derived values are carried across rather than discarded so the app
+ * keeps working before the next scan; both are re-derived from the transcript
+ * (by message content, not file mtime) the first time each file is indexed.
+ */
+const splitSessionsIntoIdentityAndTranscripts = (db: Database): void => {
+  db.exec(SESSION_TRANSCRIPTS_TABLE_SCHEMA_SQL);
+
+  // Added after the initial split: the provider's own title, derived from the
+  // transcript (a /rename outranks an ai-title outranks raw prompt text).
+  addColumnToTableIfNotExists(
+    db,
+    'session_transcripts',
+    getTableInfo(db, 'session_transcripts').map((column) => column.name),
+    'provider_name',
+    'TEXT'
+  );
+
+  const columnNames = getTableInfo(db, 'sessions').map((column) => column.name);
+  // `custom_name` is retired rather than moved: a rename now lives in the
+  // transcript as a `custom-title` line. Its value is carried into
+  // `provider_name` first so no session's label blinks out before the next
+  // sync re-derives it from disk.
+  const legacyDerivedColumns = ['jsonl_path', 'updated_at', 'custom_name'].filter((columnName) =>
+    columnNames.includes(columnName)
+  );
+
+  if (legacyDerivedColumns.length > 0) {
+    console.log('Running migration: Splitting sessions into identity and transcript tables');
+
+    const jsonlPathExpression = columnNames.includes('jsonl_path') ? 'jsonl_path' : 'NULL';
+    const updatedAtExpression = columnNames.includes('updated_at') ? 'updated_at' : 'NULL';
+    const createdAtExpression = columnNames.includes('created_at') ? 'created_at' : 'NULL';
+    const customNameExpression = columnNames.includes('custom_name') ? 'custom_name' : 'NULL';
+
+    db.exec(`
+      INSERT INTO session_transcripts (session_id, jsonl_path, provider_name, first_message_at, last_message_at)
+      SELECT session_id, ${jsonlPathExpression}, ${customNameExpression}, ${createdAtExpression}, ${updatedAtExpression}
+      FROM sessions
+      WHERE ${jsonlPathExpression} IS NOT NULL OR ${updatedAtExpression} IS NOT NULL
+      ON CONFLICT(session_id) DO NOTHING
+    `);
+
+    // Names set in the app before this change exist only here — they were
+    // never written to disk — so stash them before the column goes. A later
+    // async pass writes each one into its transcript as a `custom-title` line,
+    // which is what makes it durable and portable. Migrations are synchronous,
+    // hence the hand-off rather than doing the file writes here.
+    if (columnNames.includes('custom_name')) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS legacy_session_names (
+          session_id TEXT PRIMARY KEY NOT NULL,
+          custom_name TEXT NOT NULL
+        )
+      `);
+      db.exec(`
+        INSERT INTO legacy_session_names (session_id, custom_name)
+        SELECT session_id, custom_name FROM sessions
+        WHERE custom_name IS NOT NULL AND trim(custom_name) <> ''
+        ON CONFLICT(session_id) DO NOTHING
+      `);
+    }
+
+    // Neither column is indexed, so DROP COLUMN is safe here (SQLite 3.35+).
+    for (const legacyColumn of legacyDerivedColumns) {
+      db.exec(`ALTER TABLE sessions DROP COLUMN ${legacyColumn}`);
+    }
+  }
+
+  // Recreated unconditionally: CREATE VIEW IF NOT EXISTS would leave a stale
+  // definition in place on installs upgraded from an earlier column set.
+  db.exec('DROP VIEW IF EXISTS session_rows');
+  db.exec(SESSION_ROWS_VIEW_SQL);
+};
+
 export const runMigrations = (db: Database) => {
   try {
     const usersTableInfo = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
@@ -455,7 +560,10 @@ export const runMigrations = (db: Database) => {
     migrateLegacySessionNames(db);
     addProviderSessionIdMapping(db);
     ensureProjectsForSessionPaths(db);
+    splitSessionsIntoIdentityAndTranscripts(db);
 
+    db.exec('CREATE INDEX IF NOT EXISTS idx_session_transcripts_last_message ON session_transcripts(last_message_at)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_session_transcripts_jsonl_path ON session_transcripts(jsonl_path)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_provider_session_id ON sessions(provider_session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path)');

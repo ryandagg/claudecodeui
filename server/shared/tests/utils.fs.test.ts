@@ -7,11 +7,16 @@ import test from 'node:test';
 import {
   buildLookupMap,
   extractFirstValidJsonlData,
-  findFilesRecursivelyCreatedAfter,
+  findFilesRecursivelyModifiedAfter,
   findProviderSkillMarkdownFiles,
   findTopmostGitRoot,
+  appendSessionCustomTitle,
   readFileTimestamps,
   readJsonConfig,
+  readSessionActivityTimestamps,
+  readSessionTimestamps,
+  readSessionTitle,
+  readSessionTranscriptFacts,
   readProviderSessionActiveModelChange,
   readProviderSkillMarkdownDefinition,
   validateWorkspacePath,
@@ -252,9 +257,9 @@ test('findProviderSkillMarkdownFiles returns [] for a missing root', async () =>
 });
 
 // ---------------------------------------------------------------------------
-// findFilesRecursivelyCreatedAfter
+// findFilesRecursivelyModifiedAfter
 // ---------------------------------------------------------------------------
-test('findFilesRecursivelyCreatedAfter collects matching files across subdirectories', async () => {
+test('findFilesRecursivelyModifiedAfter collects matching files across subdirectories', async () => {
   const dir = await makeTempDir('find-files');
   try {
     await fs.mkdir(path.join(dir, 'sub'), { recursive: true });
@@ -262,7 +267,7 @@ test('findFilesRecursivelyCreatedAfter collects matching files across subdirecto
     await fs.writeFile(path.join(dir, 'sub', 'b.jsonl'), '{}', 'utf8');
     await fs.writeFile(path.join(dir, 'sub', 'c.txt'), 'nope', 'utf8');
 
-    const files = await findFilesRecursivelyCreatedAfter(dir, '.jsonl', null);
+    const files = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', null);
     assert.equal(files.length, 2);
     assert.ok(files.some((f) => f.endsWith('a.jsonl')));
     assert.ok(files.some((f) => f.endsWith(path.join('sub', 'b.jsonl'))));
@@ -271,27 +276,64 @@ test('findFilesRecursivelyCreatedAfter collects matching files across subdirecto
   }
 });
 
-test('findFilesRecursivelyCreatedAfter respects the lastScanAt cutoff', async () => {
+test('findFilesRecursivelyModifiedAfter respects the lastScanAt cutoff', async () => {
   const dir = await makeTempDir('find-files-after');
   try {
     await fs.writeFile(path.join(dir, 'old.jsonl'), '{}', 'utf8');
     // Cutoff in the future means nothing qualifies as "created after".
     const future = new Date(Date.now() + 60_000);
-    assert.deepEqual(await findFilesRecursivelyCreatedAfter(dir, '.jsonl', future), []);
+    assert.deepEqual(await findFilesRecursivelyModifiedAfter(dir, '.jsonl', future), []);
 
     // Cutoff in the past includes the file.
     const past = new Date(Date.now() - 60_000);
-    const found = await findFilesRecursivelyCreatedAfter(dir, '.jsonl', past);
+    const found = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', past);
     assert.equal(found.length, 1);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('findFilesRecursivelyCreatedAfter returns [] for a missing directory', async () => {
+test('findFilesRecursivelyModifiedAfter finds a file created before the cutoff but modified after', async () => {
+  // The regression this guards: filtering on creation time meant a transcript
+  // created last week and appended to today was never re-read, so a rename or
+  // new message made outside the app never reached the database.
+  const dir = await makeTempDir('find-files-modified');
+  try {
+    const filePath = path.join(dir, 'appended.jsonl');
+    await fs.writeFile(filePath, '{}', 'utf8');
+
+    // Backdate creation well before the cutoff, but leave mtime after it.
+    const longAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - 60_000);
+    await fs.utimes(filePath, longAgo, new Date());
+
+    const found = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', cutoff);
+    assert.deepEqual(found, [filePath], 'a modified file must be re-read regardless of when it was created');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('findFilesRecursivelyModifiedAfter skips a file untouched since the cutoff', async () => {
+  const dir = await makeTempDir('find-files-untouched');
+  try {
+    const filePath = path.join(dir, 'quiet.jsonl');
+    await fs.writeFile(filePath, '{}', 'utf8');
+
+    const longAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    await fs.utimes(filePath, longAgo, longAgo);
+
+    const found = await findFilesRecursivelyModifiedAfter(dir, '.jsonl', new Date(Date.now() - 60_000));
+    assert.deepEqual(found, [], 'unchanged files stay out of the incremental scan');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('findFilesRecursivelyModifiedAfter returns [] for a missing directory', async () => {
   const dir = await makeTempDir('find-files-missing');
   try {
-    assert.deepEqual(await findFilesRecursivelyCreatedAfter(path.join(dir, 'nope'), '.jsonl', null), []);
+    assert.deepEqual(await findFilesRecursivelyModifiedAfter(path.join(dir, 'nope'), '.jsonl', null), []);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -317,6 +359,121 @@ test('readFileTimestamps returns {} for a missing file', async () => {
   const dir = await makeTempDir('timestamps-missing');
   try {
     assert.deepEqual(await readFileTimestamps(path.join(dir, 'nope.txt')), {});
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// readSessionActivityTimestamps / readSessionTimestamps
+// ---------------------------------------------------------------------------
+const writeTranscript = async (dir: string, lines: unknown[]): Promise<string> => {
+  const filePath = path.join(dir, 'session.jsonl');
+  await fs.writeFile(filePath, lines.map((line) => JSON.stringify(line)).join('\n'), 'utf8');
+  return filePath;
+};
+
+test('readSessionActivityTimestamps reports the message time span', async () => {
+  const dir = await makeTempDir('session-activity');
+  try {
+    const filePath = await writeTranscript(dir, [
+      { timestamp: '2026-08-01T20:51:58.385Z' },
+      { timestamp: '2026-08-01T20:52:01.684Z' },
+    ]);
+
+    assert.deepEqual(await readSessionActivityTimestamps(filePath), {
+      createdAt: '2026-08-01T20:51:58.385Z',
+      updatedAt: '2026-08-01T20:52:01.684Z',
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionActivityTimestamps takes the newest time, not the last line', async () => {
+  const dir = await makeTempDir('session-activity-order');
+  try {
+    const filePath = await writeTranscript(dir, [
+      { timestamp: '2026-08-01T10:00:00.000Z' },
+      { timestamp: '2026-08-01T12:00:00.000Z' },
+      { timestamp: '2026-08-01T11:00:00.000Z' },
+    ]);
+
+    const stamps = await readSessionActivityTimestamps(filePath);
+    assert.equal(stamps.createdAt, '2026-08-01T10:00:00.000Z');
+    assert.equal(stamps.updatedAt, '2026-08-01T12:00:00.000Z');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionActivityTimestamps skips malformed lines and unusable timestamps', async () => {
+  const dir = await makeTempDir('session-activity-malformed');
+  try {
+    const filePath = path.join(dir, 'session.jsonl');
+    await fs.writeFile(
+      filePath,
+      [
+        '{ not json',
+        JSON.stringify({ timestamp: 'not-a-date' }),
+        JSON.stringify({ timestamp: 42 }),
+        JSON.stringify({ noTimestamp: true }),
+        '',
+        JSON.stringify({ timestamp: '2026-08-01T09:00:00.000Z' }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    assert.deepEqual(await readSessionActivityTimestamps(filePath), {
+      createdAt: '2026-08-01T09:00:00.000Z',
+      updatedAt: '2026-08-01T09:00:00.000Z',
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionActivityTimestamps returns {} when nothing is parseable', async () => {
+  const dir = await makeTempDir('session-activity-empty');
+  try {
+    const filePath = await writeTranscript(dir, [{ noTimestamp: true }]);
+    assert.deepEqual(await readSessionActivityTimestamps(filePath), {});
+    assert.deepEqual(await readSessionActivityTimestamps(path.join(dir, 'missing.jsonl')), {});
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTimestamps ignores mtime when the transcript has message times', async () => {
+  const dir = await makeTempDir('session-timestamps');
+  try {
+    const filePath = await writeTranscript(dir, [
+      { timestamp: '2026-08-01T20:51:58.385Z' },
+      { timestamp: '2026-08-01T20:52:01.684Z' },
+    ]);
+
+    // Touching the file must not make a day-old conversation look current —
+    // this is the regression that reordered the sidebar.
+    const future = new Date('2026-08-02T17:18:01.072Z');
+    await fs.utimes(filePath, future, future);
+
+    const stamps = await readSessionTimestamps(filePath);
+    assert.equal(stamps.updatedAt, '2026-08-01T20:52:01.684Z');
+    assert.equal(stamps.createdAt, '2026-08-01T20:51:58.385Z');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTimestamps falls back to file metadata without message times', async () => {
+  const dir = await makeTempDir('session-timestamps-fallback');
+  try {
+    const filePath = await writeTranscript(dir, [{ noTimestamp: true }]);
+    const stamps = await readSessionTimestamps(filePath);
+    const fileStamps = await readFileTimestamps(filePath);
+
+    assert.equal(stamps.updatedAt, fileStamps.updatedAt);
+    assert.equal(stamps.createdAt, fileStamps.createdAt);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -474,5 +631,205 @@ test('validateWorkspacePath rejects a path outside the workspace root', async ()
     assert.match(result.error ?? '', /within the allowed workspace root/i);
   } finally {
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// readSessionTitle / appendSessionCustomTitle
+// ---------------------------------------------------------------------------
+const writeTitleTranscript = async (dir: string, lines: unknown[]): Promise<string> => {
+  const filePath = path.join(dir, 'titles.jsonl');
+  await fs.writeFile(filePath, lines.map((line) => JSON.stringify(line)).join('\n'), 'utf8');
+  return filePath;
+};
+
+test('readSessionTranscriptFacts gathers identity, title and span in one read', async () => {
+  const dir = await makeTempDir('transcript-facts');
+  try {
+    const filePath = await writeTitleTranscript(dir, [
+      { sessionId: 'sess-9', cwd: '/workspace/demo', type: 'user', timestamp: '2026-01-01T10:00:00.000Z' },
+      { type: 'ai-title', aiTitle: 'Generated' },
+      { type: 'custom-title', customTitle: 'the rename' },
+      { type: 'assistant', timestamp: '2026-01-01T12:00:00.000Z' },
+      { type: 'assistant', timestamp: '2026-01-01T11:00:00.000Z' },
+    ]);
+
+    assert.deepEqual(await readSessionTranscriptFacts(filePath), {
+      sessionId: 'sess-9',
+      projectPath: '/workspace/demo',
+      title: 'the rename',
+      createdAt: '2026-01-01T10:00:00.000Z',
+      updatedAt: '2026-01-01T12:00:00.000Z',
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTranscriptFacts reports no identity when the transcript lacks one', async () => {
+  const dir = await makeTempDir('transcript-facts-empty');
+  try {
+    const filePath = await writeTitleTranscript(dir, [{ type: 'user', text: 'no sessionId or cwd' }]);
+    const facts = await readSessionTranscriptFacts(filePath);
+    assert.equal(facts.sessionId, undefined);
+    assert.equal(facts.projectPath, undefined);
+
+    assert.deepEqual(await readSessionTranscriptFacts(path.join(dir, 'missing.jsonl')), {});
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle ranks a /rename above a generated title', async () => {
+  const dir = await makeTempDir('title-precedence');
+  try {
+    // ai-title is written LAST; precedence must be by meaning, not position.
+    const filePath = await writeTitleTranscript(dir, [
+      { type: 'last-prompt', lastPrompt: 'raw first prompt text' },
+      { type: 'custom-title', customTitle: 'my explicit rename' },
+      { type: 'ai-title', aiTitle: 'Generated Summary' },
+    ]);
+
+    assert.equal(await readSessionTitle(filePath), 'my explicit rename');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle falls back to ai-title when there is no rename', async () => {
+  const dir = await makeTempDir('title-fallback');
+  try {
+    const withAiTitle = await writeTitleTranscript(dir, [
+      { type: 'last-prompt', lastPrompt: 'raw prompt' },
+      { type: 'ai-title', aiTitle: 'Generated Summary' },
+    ]);
+    assert.equal(await readSessionTitle(withAiTitle), 'Generated Summary');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle never names a session after its latest prompt', async () => {
+  // Regression: `last-prompt` is rewritten every turn, so treating it as a
+  // title made the sidebar label follow whatever the user typed most recently.
+  // A transcript with only last-prompt lines has no title at all.
+  const dir = await makeTempDir('title-last-prompt');
+  try {
+    const filePath = await writeTitleTranscript(dir, [
+      { type: 'last-prompt', lastPrompt: 'an early question' },
+      { type: 'last-prompt', lastPrompt: 'a much later unrelated question' },
+    ]);
+    assert.equal(await readSessionTitle(filePath), null);
+
+    // And it must not outrank a real title either.
+    const withRename = await writeTitleTranscript(dir, [
+      { type: 'custom-title', customTitle: 'my rename' },
+      { type: 'last-prompt', lastPrompt: 'typed long after the rename' },
+    ]);
+    assert.equal(await readSessionTitle(withRename), 'my rename');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle takes the most recent rename of the same rank', async () => {
+  const dir = await makeTempDir('title-latest');
+  try {
+    const filePath = await writeTitleTranscript(dir, [
+      { type: 'custom-title', customTitle: 'first rename' },
+      { type: 'custom-title', customTitle: 'second rename' },
+    ]);
+    assert.equal(await readSessionTitle(filePath), 'second rename');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSessionTitle returns null for a transcript with no titles', async () => {
+  const dir = await makeTempDir('title-none');
+  try {
+    const filePath = await writeTitleTranscript(dir, [{ type: 'user', text: 'hi' }]);
+    assert.equal(await readSessionTitle(filePath), null);
+    assert.equal(await readSessionTitle(path.join(dir, 'missing.jsonl')), null);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle makes a rename readable back from the transcript', async () => {
+  const dir = await makeTempDir('title-append');
+  const previousHome = process.env.CLAUDE_HOME;
+  process.env.CLAUDE_HOME = dir;
+  try {
+    const filePath = await writeTitleTranscript(dir, [{ type: 'ai-title', aiTitle: 'Generated' }]);
+
+    assert.equal(await appendSessionCustomTitle(filePath, 'sess-1', 'renamed by the app'), true);
+    assert.equal(await readSessionTitle(filePath), 'renamed by the app');
+
+    // The file must stay valid JSONL for every other reader.
+    const contents = await fs.readFile(filePath, 'utf8');
+    for (const line of contents.trim().split('\n')) {
+      JSON.parse(line);
+    }
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.CLAUDE_HOME;
+    } else {
+      process.env.CLAUDE_HOME = previousHome;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle refuses to write outside CLAUDE_HOME', async () => {
+  // The guard that stops an isolated run from reaching the user's real
+  // transcripts. Transcript paths come from the database, so a copied database
+  // still carries absolute paths into the real tree — redirecting CLAUDE_HOME
+  // alone is not enough.
+  const dir = await makeTempDir('title-outside-home');
+  try {
+    const outsidePath = path.join(dir, 'not-in-claude-home.jsonl');
+    await fs.writeFile(outsidePath, JSON.stringify({ type: 'user' }), 'utf8');
+    const contentsBefore = await fs.readFile(outsidePath, 'utf8');
+
+    assert.equal(await appendSessionCustomTitle(outsidePath, 'sess-1', 'should not land'), false);
+    assert.equal(await fs.readFile(outsidePath, 'utf8'), contentsBefore, 'file must be untouched');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle writes when the path is inside CLAUDE_HOME', async () => {
+  const dir = await makeTempDir('title-inside-home');
+  const previousHome = process.env.CLAUDE_HOME;
+  try {
+    // Redirect the provider home at the temp tree — the isolation this exists
+    // to make possible.
+    process.env.CLAUDE_HOME = dir;
+    const insidePath = path.join(dir, 'session.jsonl');
+    await fs.writeFile(insidePath, JSON.stringify({ type: 'user' }) + '\n', 'utf8');
+
+    assert.equal(await appendSessionCustomTitle(insidePath, 'sess-1', 'allowed'), true);
+    assert.match(await fs.readFile(insidePath, 'utf8'), /"customTitle":"allowed"/);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.CLAUDE_HOME;
+    } else {
+      process.env.CLAUDE_HOME = previousHome;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('appendSessionCustomTitle reports failure when there is no transcript', async () => {
+  const dir = await makeTempDir('title-append-missing');
+  try {
+    assert.equal(await appendSessionCustomTitle(path.join(dir, 'nope.jsonl'), 'sess-1', 'name'), false);
+    // A blank rename is not written either.
+    const filePath = await writeTitleTranscript(dir, [{ type: 'user', text: 'hi' }]);
+    assert.equal(await appendSessionCustomTitle(filePath, 'sess-1', '   '), false);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });

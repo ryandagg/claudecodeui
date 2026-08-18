@@ -3,7 +3,7 @@ import path from 'node:path';
 import { getConnection } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { searchIndexDb } from '@/modules/database/repositories/search-index.db.js';
-import { normalizeProjectPath } from '@/shared/utils.js';
+import { appendSessionCustomTitle, normalizeProjectPath } from '@/shared/utils.js';
 
 type SessionRow = {
   session_id: string;
@@ -85,9 +85,9 @@ export const sessionsDb = {
     const updatedAtValue = normalizeTimestamp(updatedAt);
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
-    // First, ensure the project path is recorded in the projects table,
-    // since it's a foreign key in the sessions table.
-    projectsDb.createProjectPath(normalizedProjectPath);
+    // Passive discovery must never reactivate a project the user archived,
+    // so this is the ensure variant rather than the user-facing create.
+    projectsDb.ensureProjectPath(normalizedProjectPath);
 
     const existing = db
       .prepare(
@@ -97,54 +97,87 @@ export const sessionsDb = {
       )
       .get(providerSessionId, provider) as { session_id: string } | undefined;
 
-    if (existing) {
-      db.prepare(
-        `UPDATE sessions SET
-           provider = ?,
-           updated_at = COALESCE(?, CURRENT_TIMESTAMP),
-           project_path = ?,
-           jsonl_path = ?,
-           isArchived = 0,
-           custom_name = COALESCE(?, custom_name)
-         WHERE session_id = ?`
-      ).run(
-        provider,
-        updatedAtValue,
-        normalizedProjectPath,
-        jsonlPath ?? null,
-        customName ?? null,
-        existing.session_id
-      );
+    const sessionId = existing?.session_id ?? providerSessionId;
 
-      return existing.session_id;
-    }
-
-    // Sessions created outside the app (directly via the provider CLI) are
-    // keyed by the provider-native id for both columns. The ON CONFLICT path
-    // covers legacy rows that predate the provider_session_id mapping.
+    // Identity only. `custom_name`, `isArchived` and `starred_at` are owned by
+    // the user and exist nowhere on disk, so no synchronizer statement may
+    // write them — re-deriving from a transcript cannot clobber them. The
+    // provider's own title is derived and lands in session_transcripts.
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
+      `INSERT INTO sessions (session_id, provider, provider_session_id, project_path, created_at)
+       VALUES (?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
        ON CONFLICT(session_id) DO UPDATE SET
          provider = excluded.provider,
          provider_session_id = excluded.provider_session_id,
-         updated_at = excluded.updated_at,
-         project_path = excluded.project_path,
-         jsonl_path = excluded.jsonl_path,
-         isArchived = 0,
-         custom_name = COALESCE(excluded.custom_name, sessions.custom_name)`
+         project_path = excluded.project_path`
     ).run(
-      providerSessionId,
+      sessionId,
       provider,
       providerSessionId,
-      customName ?? null,
       normalizedProjectPath,
-      jsonlPath ?? null,
-      createdAtValue,
-      updatedAtValue
+      createdAtValue
     );
 
-    return providerSessionId;
+    sessionsDb.upsertSessionTranscript(sessionId, {
+      providerName: customName ?? null,
+      jsonlPath: jsonlPath ?? null,
+      firstMessageAt: createdAtValue,
+      lastMessageAt: updatedAtValue,
+    });
+
+    return sessionId;
+  },
+
+  /**
+   * Records transcript-derived facts for one session.
+   *
+   * Everything written here is reconstructible from the file on disk, so this
+   * table can be emptied and rebuilt at will. Callers pass timestamps taken
+   * from message content; file mtime is not a valid source.
+   */
+  upsertSessionTranscript(
+    sessionId: string,
+    transcript: {
+      providerName?: string | null;
+      jsonlPath?: string | null;
+      firstMessageAt?: string | null;
+      lastMessageAt?: string | null;
+    }
+  ): void {
+    const db = getConnection();
+
+    // `provider_name` is authoritative, not additive: the caller re-derives it
+    // from the transcript (a `custom-title`/`ai-title` line, or nothing), so a
+    // NULL here means "this transcript carries no title" and must clear any
+    // stale value — including a fabricated placeholder written by an earlier
+    // build. Any real name lives in the transcript and is recovered on the
+    // next scan, so clearing is never lossy. `jsonl_path` and the timestamp
+    // span stay additive (COALESCE): different callers know different subsets,
+    // and none of them should be able to blank a path or span with NULL.
+    //
+    // The WHERE guard makes the update a no-op when nothing changed, so the
+    // idempotent re-emit of a stable `ai-title` (Claude rewrites the same line
+    // on every resume) touches zero rows instead of churning `indexed_at`.
+    db.prepare(
+      `INSERT INTO session_transcripts (session_id, provider_name, jsonl_path, first_message_at, last_message_at, indexed_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(session_id) DO UPDATE SET
+         provider_name = excluded.provider_name,
+         jsonl_path = COALESCE(excluded.jsonl_path, session_transcripts.jsonl_path),
+         first_message_at = COALESCE(excluded.first_message_at, session_transcripts.first_message_at),
+         last_message_at = COALESCE(excluded.last_message_at, session_transcripts.last_message_at),
+         indexed_at = CURRENT_TIMESTAMP
+       WHERE session_transcripts.provider_name IS NOT excluded.provider_name
+          OR session_transcripts.jsonl_path IS NOT COALESCE(excluded.jsonl_path, session_transcripts.jsonl_path)
+          OR session_transcripts.first_message_at IS NOT COALESCE(excluded.first_message_at, session_transcripts.first_message_at)
+          OR session_transcripts.last_message_at IS NOT COALESCE(excluded.last_message_at, session_transcripts.last_message_at)`
+    ).run(
+      sessionId,
+      transcript.providerName ?? null,
+      transcript.jsonlPath ?? null,
+      normalizeTimestamp(transcript.firstMessageAt ?? undefined),
+      normalizeTimestamp(transcript.lastMessageAt ?? undefined)
+    );
   },
 
   /**
@@ -159,11 +192,13 @@ export const sessionsDb = {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
-    projectsDb.createProjectPath(normalizedProjectPath);
+    projectsDb.ensureProjectPath(normalizedProjectPath);
 
+    // No transcript row yet — one appears once the provider writes the file.
+    // Until then `session_rows` falls back to created_at for ordering.
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, NULL, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      `INSERT INTO sessions (session_id, provider, provider_session_id, project_path, isArchived, created_at)
+       VALUES (?, ?, NULL, ?, 0, CURRENT_TIMESTAMP)`
     ).run(sessionId, provider, normalizedProjectPath);
 
     return sessionId;
@@ -184,7 +219,7 @@ export const sessionsDb = {
     const merge = db.transaction(() => {
       const duplicate = db
         .prepare(
-          `SELECT ${SESSION_ROW_COLUMNS} FROM sessions
+          `SELECT ${SESSION_ROW_COLUMNS} FROM session_rows
            WHERE (session_id = ? OR provider_session_id = ?)
              AND session_id <> ?
            LIMIT 1`
@@ -192,36 +227,84 @@ export const sessionsDb = {
         .get(providerSessionId, providerSessionId, sessionId) as SessionRow | undefined;
 
       if (duplicate) {
+        // Deleting the duplicate cascades to its transcript row, so adopt the
+        // derived facts onto the surviving app row first.
+        const duplicateTranscript = db
+          .prepare(
+            `SELECT first_message_at, last_message_at FROM session_transcripts WHERE session_id = ?`
+          )
+          .get(duplicate.session_id) as
+          | { first_message_at: string | null; last_message_at: string | null }
+          | undefined;
+
         db.prepare('DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
-        db.prepare(
-          `UPDATE sessions SET
-             provider_session_id = ?,
-             jsonl_path = COALESCE(jsonl_path, ?),
-             custom_name = COALESCE(custom_name, ?),
-             updated_at = CURRENT_TIMESTAMP
-           WHERE session_id = ?`
-        ).run(providerSessionId, duplicate.jsonl_path, duplicate.custom_name, sessionId);
+        db.prepare('UPDATE sessions SET provider_session_id = ? WHERE session_id = ?')
+          .run(providerSessionId, sessionId);
+
+        sessionsDb.upsertSessionTranscript(sessionId, {
+          providerName: duplicate.custom_name,
+          jsonlPath: duplicate.jsonl_path,
+          firstMessageAt: duplicateTranscript?.first_message_at ?? null,
+          lastMessageAt: duplicateTranscript?.last_message_at ?? null,
+        });
         return;
       }
 
       db.prepare(
-        `UPDATE sessions SET
-           provider_session_id = ?,
-           updated_at = CURRENT_TIMESTAMP
-         WHERE session_id = ?`
+        `UPDATE sessions SET provider_session_id = ? WHERE session_id = ?`
       ).run(providerSessionId, sessionId);
     });
 
     merge();
   },
 
-  updateSessionCustomName(sessionId: string, customName: string): void {
+  /**
+   * Renames a session by writing a `custom-title` line into its transcript.
+   *
+   * The transcript is the only home for a rename. Written there it is portable
+   * — `claude --resume` shows it, it survives any rebuild of derived data, and
+   * a rename made by Claude's own `/rename` is the same fact in the same
+   * place, so the two can never disagree. `provider_name` is updated in step
+   * so the UI reflects the change without waiting for the next sync.
+   *
+   * Returns false when the session has no transcript to write to; callers
+   * surface that rather than storing the name somewhere it cannot be seen
+   * from outside this app.
+   */
+  async updateSessionCustomName(sessionId: string, customName: string): Promise<boolean> {
     const db = getConnection();
-    db.prepare(
-      `UPDATE sessions
-       SET custom_name = ?
-       WHERE session_id = ?`
-    ).run(customName, sessionId);
+    const trimmedName = customName.trim();
+
+    const session = db
+      .prepare(
+        `SELECT session_transcripts.jsonl_path AS jsonl_path,
+                sessions.provider_session_id AS provider_session_id
+         FROM sessions
+         LEFT JOIN session_transcripts ON session_transcripts.session_id = sessions.session_id
+         WHERE sessions.session_id = ?`
+      )
+      .get(sessionId) as
+      | { jsonl_path: string | null; provider_session_id: string | null }
+      | undefined;
+
+    if (!session?.jsonl_path) {
+      return false;
+    }
+
+    const wroteToTranscript = await appendSessionCustomTitle(
+      session.jsonl_path,
+      session.provider_session_id ?? sessionId,
+      trimmedName
+    );
+
+    if (!wroteToTranscript) {
+      return false;
+    }
+
+    db.prepare('UPDATE session_transcripts SET provider_name = ? WHERE session_id = ?')
+      .run(trimmedName, sessionId);
+
+    return true;
   },
 
   getSessionById(sessionId: string): SessionRow | null {
@@ -229,7 +312,7 @@ export const sessionsDb = {
     const row = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE session_id = ?
          ORDER BY updated_at DESC
          LIMIT 1`
@@ -251,7 +334,7 @@ export const sessionsDb = {
     const row = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE provider_session_id = ?
          ORDER BY updated_at DESC
          LIMIT 1`
@@ -285,7 +368,7 @@ export const sessionsDb = {
     const row = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE provider = ?
            AND project_path = ?
            AND provider_session_id IS NULL
@@ -303,7 +386,7 @@ export const sessionsDb = {
     const rows = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE isArchived = 0`
       )
       .all() as SessionRow[];
@@ -322,7 +405,7 @@ export const sessionsDb = {
   getAllSessionsIncludingArchived(): SessionRow[] {
     const db = getConnection();
     const rows = db
-      .prepare(`SELECT ${SESSION_ROW_COLUMNS} FROM sessions`)
+      .prepare(`SELECT ${SESSION_ROW_COLUMNS} FROM session_rows`)
       .all() as SessionRow[];
 
     return normalizeSessionRows(rows);
@@ -337,7 +420,7 @@ export const sessionsDb = {
     const rows = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE isArchived = 1
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC`
       )
@@ -352,7 +435,7 @@ export const sessionsDb = {
     const rows = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE project_path = ?
            AND isArchived = 0`
       )
@@ -371,7 +454,7 @@ export const sessionsDb = {
     const rows = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE project_path = ?`
       )
       .all(normalizedProjectPath) as SessionRow[];
@@ -385,7 +468,7 @@ export const sessionsDb = {
     const rows = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
-         FROM sessions
+         FROM session_rows
          WHERE project_path = ?
            AND isArchived = 0
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
@@ -402,7 +485,7 @@ export const sessionsDb = {
     const row = db
       .prepare(
         `SELECT COUNT(*) AS count
-         FROM sessions
+         FROM session_rows
          WHERE project_path = ?
            AND isArchived = 0`
       )
@@ -425,7 +508,7 @@ export const sessionsDb = {
     const row = db
       .prepare(
         `SELECT custom_name
-         FROM sessions
+         FROM session_rows
          WHERE session_id = ? AND provider = ?`
       )
       .get(sessionId, provider) as { custom_name: string | null } | undefined;
@@ -452,7 +535,7 @@ export const sessionsDb = {
     // Capture the transcript path before deleting so its index rows can be
     // mirrored out. Read first: after the DELETE the row is gone.
     const row = db
-      .prepare('SELECT jsonl_path FROM sessions WHERE session_id = ?')
+      .prepare('SELECT jsonl_path FROM session_rows WHERE session_id = ?')
       .get(sessionId) as { jsonl_path: string | null } | undefined;
 
     const deleted = db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
@@ -464,7 +547,7 @@ export const sessionsDb = {
       // other session still references the file, so a delete of one row never
       // blinds search for its sibling.
       const stillReferenced = db
-        .prepare('SELECT 1 FROM sessions WHERE jsonl_path = ? LIMIT 1')
+        .prepare('SELECT 1 FROM session_rows WHERE jsonl_path = ? LIMIT 1')
         .get(rawJsonlPath) as { 1: number } | undefined;
       if (!stillReferenced) {
         searchIndexDb.deleteByJsonlPath(path.resolve(rawJsonlPath));

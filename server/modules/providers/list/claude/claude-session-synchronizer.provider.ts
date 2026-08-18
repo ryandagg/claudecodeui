@@ -1,14 +1,12 @@
-import os from 'node:os';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import {
-  buildLookupMap,
-  extractFirstValidJsonlData,
-  findFilesRecursivelyCreatedAfter,
+  getClaudeHome,
+  findFilesRecursivelyModifiedAfter,
   normalizeSessionName,
   readFileTimestamps,
+  readSessionTranscriptFacts,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
 
@@ -16,6 +14,8 @@ type ParsedSession = {
   sessionId: string;
   projectPath: string;
   sessionName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 /**
@@ -23,7 +23,7 @@ type ParsedSession = {
  */
 export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
   private readonly provider = 'claude' as const;
-  private readonly claudeHome = path.join(os.homedir(), '.claude');
+  private get claudeHome(): string { return getClaudeHome(); }
 
   /**
    * Returns true when a JSONL file is a subagent transcript rather than a
@@ -44,8 +44,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    * Scans ~/.claude/projects and upserts discovered sessions into DB.
    */
   async synchronize(since?: Date): Promise<number> {
-    const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
-    const files = await findFilesRecursivelyCreatedAfter(
+    const files = await findFilesRecursivelyModifiedAfter(
       path.join(this.claudeHome, 'projects'),
       '.jsonl',
       since ?? null
@@ -57,12 +56,14 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
         continue;
       }
 
-      const parsed = await this.processSessionFile(filePath, nameMap);
+      const parsed = await this.processSessionFile(filePath);
       if (!parsed) {
         continue;
       }
 
-      const timestamps = await readFileTimestamps(filePath);
+      const timestamps = parsed.createdAt || parsed.updatedAt
+        ? { createdAt: parsed.createdAt, updatedAt: parsed.updatedAt }
+        : await readFileTimestamps(filePath);
       sessionsDb.createSession(
         parsed.sessionId,
         this.provider,
@@ -89,13 +90,14 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
-    const parsed = await this.processSessionFile(filePath, nameMap);
+    const parsed = await this.processSessionFile(filePath);
     if (!parsed) {
       return null;
     }
 
-    const timestamps = await readFileTimestamps(filePath);
+    const timestamps = parsed.createdAt || parsed.updatedAt
+      ? { createdAt: parsed.createdAt, updatedAt: parsed.updatedAt }
+      : await readFileTimestamps(filePath);
     return sessionsDb.createSession(
       parsed.sessionId,
       this.provider,
@@ -111,91 +113,38 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    * Extracts session metadata from one Claude JSONL session file.
    */
   private async processSessionFile(
-    filePath: string,
-    nameMap: Map<string, string>
+    filePath: string
   ): Promise<ParsedSession | null> {
-    const parsed = await extractFirstValidJsonlData(filePath, (rawData) => {
-      const data = rawData as Record<string, unknown>;
-      const sessionId = typeof data.sessionId === 'string' ? data.sessionId : undefined;
-      const projectPath = typeof data.cwd === 'string' ? data.cwd : undefined;
-
-      if (!sessionId || !projectPath) {
-        return null;
-      }
-
-      return {
-        sessionId,
-        projectPath,
-      };
-    });
-
-    if (!parsed) {
+    // One pass for identity, title and activity span. The watcher fires on
+    // every append to an active transcript, so scanning once per fact would
+    // re-read a growing multi-megabyte file several times per change.
+    const facts = await readSessionTranscriptFacts(filePath);
+    if (!facts.sessionId || !facts.projectPath) {
       return null;
     }
 
-    // App-created sessions are keyed by an app id, so disk-discovered provider
-    // ids must be resolved through the provider-id mapping first.
-    const existingSession = sessionsDb.getSessionByProviderSessionId(parsed.sessionId)
-      ?? sessionsDb.getSessionById(parsed.sessionId);
-    const existingSessionName = existingSession?.custom_name;
-    if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {
-      return {
-        ...parsed,
-        sessionName: normalizeSessionName(existingSessionName, 'Untitled Claude Session'),
-      };
-    }
-
-    let sessionName = nameMap.get(parsed.sessionId);
-    if (!sessionName) {
-      sessionName = await this.extractSessionAiTitleFromEnd(filePath, parsed.sessionId);
-    }
+    // Only a real transcript title is cached as the session name: a user's
+    // `/rename` (`custom-title`) or Claude's own `ai-title`. Both live in the
+    // transcript, so the cached value always matches what `claude --resume`
+    // shows and can never disagree with it.
+    //
+    // Deliberately no fallback to history.jsonl's `display` or a static
+    // placeholder. `display` is only the first prompt — literally "/model" or
+    // "[Pasted text …]" for many sessions — so caching it fabricates a name
+    // that is nowhere in the transcript and then flip-flops on every sync.
+    // A session with no title stays unnamed here (provider_name NULL); the
+    // sidebar derives a first-message preview at read time instead.
+    const sessionName = facts.title
+      ? normalizeSessionName(facts.title, '')
+      : undefined;
 
     return {
-      ...parsed,
-      sessionName: normalizeSessionName(sessionName, 'Untitled Claude Session'),
+      sessionId: facts.sessionId,
+      projectPath: facts.projectPath,
+      sessionName: sessionName || undefined,
+      createdAt: facts.createdAt,
+      updatedAt: facts.updatedAt,
     };
   }
 
-  private async extractSessionAiTitleFromEnd(
-    filePath: string,
-    sessionId: string
-  ): Promise<string | undefined> {
-    try {
-      const content = await readFile(filePath, 'utf8');
-      const lines = content.split(/\r?\n/);
-
-      for (let index = lines.length - 1; index >= 0; index -= 1) {
-        const line = lines[index]?.trim();
-        if (!line) {
-          continue;
-        }
-
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          continue;
-        }
-
-        const data = parsed as Record<string, unknown>;
-        const eventType = typeof data.type === 'string' ? data.type : undefined;
-        const eventSessionId = typeof data.sessionId === 'string' ? data.sessionId : undefined;
-        const aiTitle = typeof data.aiTitle === 'string' ? data.aiTitle : undefined;
-        const lastPrompt = typeof data.lastPrompt === 'string' ? data.lastPrompt : undefined;
-        const claudeRenamedTitle = typeof data.customTitle === 'string' ? data.customTitle : undefined;
-
-        if (
-          (eventType === 'ai-title' && eventSessionId === sessionId && aiTitle?.trim()) ||
-          (eventType === 'last-prompt' && eventSessionId === sessionId && lastPrompt?.trim()) ||
-          (eventType === "custom-title" && eventSessionId === sessionId && claudeRenamedTitle?.trim())
-        ) {
-          return aiTitle || lastPrompt || claudeRenamedTitle;
-        }
-      }
-    } catch {
-      // Ignore missing/unreadable files so sync can continue.
-    }
-
-    return undefined;
-  }
 }

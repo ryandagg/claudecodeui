@@ -81,6 +81,9 @@ export default function SidebarSessionItem({
   const isSelected = selectedSession?.id === session.id;
   const isEditing = editingSession === session.id;
   const compactSessionAge = formatCompactSessionAge(sessionView.sessionTime, currentTime);
+  // A rename is written into the transcript, so a session the provider has not
+  // written yet has nowhere to store one. Mirrors SidebarConversationList.
+  const canRename = Boolean(session.jsonlPath);
   const editingContainerRef = useRef<HTMLDivElement>(null);
   const showRecentIndicator = !isProcessing && sessionView.isActive;
 
@@ -307,12 +310,16 @@ export default function SidebarSessionItem({
             ) : (
               <>
                 <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                  className={cn(
+                    'flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40',
+                    canRename ? '' : 'cursor-not-allowed opacity-40 hover:bg-gray-50 dark:hover:bg-gray-900/20',
+                  )}
+                  disabled={!canRename}
                   onClick={(event) => {
                     event.stopPropagation();
                     onStartEditingSession(session.id, sessionView.sessionName);
                   }}
-                  title={t('tooltips.editSessionName')}
+                  title={canRename ? t('tooltips.editSessionName') : t('tooltips.renameNeedsTranscript')}
                 >
                   <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
                 </button>

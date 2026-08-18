@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import {
   access,
+  open,
+  appendFile,
   lstat,
   mkdir,
   readFile,
@@ -1257,11 +1259,17 @@ export function sanitizeLeafDirectoryName(inputName: string, label = 'directory 
  * Recursively discovers files that match one extension, with optional incremental filtering.
  *
  * Provider synchronizers call this to find transcript artifacts under provider
- * home directories. Pass `lastScanAt` to include only files created after the
- * previous scan, or pass `null` to perform a full rescan. Missing directories
+ * home directories. Pass `lastScanAt` to include only files *modified* since
+ * the previous scan, or `null` to perform a full rescan. Missing directories
  * are treated as empty because not every provider exists on every machine.
+ *
+ * Creation time cannot answer "did this change since the last scan": a
+ * transcript created last week and appended to this morning still has an old
+ * birthtime, so a birthtime filter skips it forever and its derived data goes
+ * permanently stale — including anything renamed from the provider's own CLI.
+ * Re-reading an unchanged file is cheap next to never re-reading a changed one.
  */
-export async function findFilesRecursivelyCreatedAfter(
+export async function findFilesRecursivelyModifiedAfter(
   rootDir: string,
   extension: string,
   lastScanAt: Date | null,
@@ -1273,7 +1281,7 @@ export async function findFilesRecursivelyCreatedAfter(
       const fullPath = path.join(rootDir, entry.name);
 
       if (entry.isDirectory()) {
-        await findFilesRecursivelyCreatedAfter(fullPath, extension, lastScanAt, fileList);
+        await findFilesRecursivelyModifiedAfter(fullPath, extension, lastScanAt, fileList);
         continue;
       }
 
@@ -1287,7 +1295,7 @@ export async function findFilesRecursivelyCreatedAfter(
       }
 
       const fileStat = await stat(fullPath);
-      if (fileStat.birthtime > lastScanAt) {
+      if (fileStat.mtime > lastScanAt) {
         fileList.push(fullPath);
       }
     }
@@ -1301,9 +1309,11 @@ export async function findFilesRecursivelyCreatedAfter(
 /**
  * Reads file creation/update timestamps and maps them to DB-friendly ISO strings.
  *
- * Session indexers use this to persist `created_at` and `updated_at` metadata
- * when upserting sessions. If the file cannot be read, an empty object is
- * returned so indexing can continue for other files.
+ * Prefer {@link readSessionActivityTimestamps} for session transcripts: file
+ * mtime tracks when the file was last *written*, not when the conversation was
+ * last active. This remains the fallback for transcripts that carry no usable
+ * message timestamps. If the file cannot be read, an empty object is returned
+ * so indexing can continue for other files.
  */
 export async function readFileTimestamps(
   filePath: string
@@ -1317,6 +1327,296 @@ export async function readFileTimestamps(
   } catch {
     return {};
   }
+}
+
+/**
+ * Reads the first and last message timestamps out of a session transcript.
+ *
+ * Session recency must come from conversation content, not filesystem
+ * metadata. Resuming a session, re-indexing, or copying the transcript all
+ * bump mtime without adding a message, which would float a stale conversation
+ * to the top of the sidebar.
+ *
+ * Lines are scanned in order and the newest timestamp wins rather than simply
+ * taking the last line, since transcripts may interleave out of order. Returns
+ * an empty object when nothing parseable is found, so callers can fall back to
+ * {@link readFileTimestamps}.
+ */
+export async function readSessionActivityTimestamps(
+  filePath: string
+): Promise<{ createdAt?: string; updatedAt?: string }> {
+  const { createdAt, updatedAt } = await readSessionTranscriptFacts(filePath);
+  return createdAt || updatedAt ? { createdAt, updatedAt } : {};
+}
+
+/**
+ * Everything the synchronizer needs from a transcript, in a single pass.
+ *
+ * Identity, title and activity span all come from the same lines, so reading
+ * the file once per change matters: the watcher polls every few seconds and a
+ * busy transcript reaches megabytes, so a scan per fact multiplies the cost of
+ * every append. {@link readSessionTitle} and
+ * {@link readSessionActivityTimestamps} remain as focused wrappers for callers
+ * that genuinely want one fact.
+ */
+export async function readSessionTranscriptFacts(filePath: string): Promise<{
+  sessionId?: string;
+  projectPath?: string;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}> {
+  const titlesByRank = new Map<string, string>();
+  let sessionId: string | undefined;
+  let projectPath: string | undefined;
+  let earliestTime = Number.POSITIVE_INFINITY;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  try {
+    const fileStream = fs.createReadStream(filePath);
+    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of lineReader) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        // Partially written or malformed lines are expected while a session streams.
+        continue;
+      }
+
+      // Identity comes from the first line that carries both, matching the
+      // previous first-valid-line extraction.
+      if (sessionId === undefined && typeof data.sessionId === 'string') {
+        if (typeof data.cwd === 'string') {
+          sessionId = data.sessionId;
+          projectPath = data.cwd;
+        }
+      }
+
+      for (const field of SESSION_TITLE_PRECEDENCE) {
+        const value = data[field];
+        if (typeof value === 'string' && value.trim()) {
+          titlesByRank.set(field, value.trim());
+        }
+      }
+
+      if (typeof data.timestamp === 'string') {
+        const parsedTime = new Date(data.timestamp).getTime();
+        if (!Number.isNaN(parsedTime)) {
+          earliestTime = Math.min(earliestTime, parsedTime);
+          latestTime = Math.max(latestTime, parsedTime);
+        }
+      }
+    }
+  } catch {
+    return {};
+  }
+
+  let title: string | undefined;
+  for (const field of SESSION_TITLE_PRECEDENCE) {
+    const ranked = titlesByRank.get(field);
+    if (ranked) {
+      title = ranked;
+      break;
+    }
+  }
+
+  const hasSpan = Number.isFinite(earliestTime) && Number.isFinite(latestTime);
+
+  return {
+    sessionId,
+    projectPath,
+    title,
+    createdAt: hasSpan ? new Date(earliestTime).toISOString() : undefined,
+    updatedAt: hasSpan ? new Date(latestTime).toISOString() : undefined,
+  };
+}
+
+/**
+ * Root of the Claude CLI's own data directory — transcripts, history, skills.
+ *
+ * Overridable so tests and one-off scripts can point session reads and writes
+ * at a temp directory, the way `DATABASE_PATH` isolates the database. Without
+ * an equivalent knob there was no way to exercise code that writes transcripts
+ * without writing the user's real ones.
+ *
+ * **Scope: session transcript read/write, the watcher root, and skills.** Auth,
+ * settings and command lookups still resolve `~/.claude` directly, so this is
+ * not a complete sandbox for the provider directory. The write guard in
+ * {@link appendSessionCustomTitle} — not this redirect — is what actually
+ * prevents an isolated run from modifying real transcripts.
+ */
+export function getClaudeHome(): string {
+  return process.env.CLAUDE_HOME || path.join(os.homedir(), '.claude');
+}
+
+/**
+ * Guards writes into the provider's data directory.
+ *
+ * Redirecting {@link CLAUDE_HOME} is not sufficient on its own: transcript
+ * paths are read from the database, so a copied database still carries
+ * absolute paths into the real tree. This refuses any write that lands outside
+ * the configured home, so an isolated run fails loudly instead of quietly
+ * modifying the user's transcripts.
+ */
+function isInsideClaudeHome(filePath: string): boolean {
+  // Resolved per call, not captured at module load, so a test or script can
+  // redirect the home around a single operation.
+  const resolvedHome = path.resolve(getClaudeHome());
+  const resolvedTarget = path.resolve(filePath);
+  return resolvedTarget === resolvedHome || resolvedTarget.startsWith(`${resolvedHome}${path.sep}`);
+}
+
+/**
+ * Titles a Claude transcript carries, in order of authority.
+ *
+ * `custom-title` is written by the user's `/rename`, so it outranks anything
+ * generated. `ai-title` is a model-written summary of the conversation.
+ *
+ * `last-prompt` is deliberately excluded. It is not a title — Claude rewrites
+ * it every turn, so using it as a name makes the sidebar label follow whatever
+ * the user typed most recently. A session with no title at all falls back to
+ * `history.jsonl`'s `display` (the *first* prompt), which at least stays put.
+ */
+const SESSION_TITLE_PRECEDENCE = ['customTitle', 'aiTitle'] as const;
+
+/**
+ * Reads the best available title out of a session transcript.
+ *
+ * Scans the whole file and applies precedence by *meaning*, not by file
+ * position — a later `ai-title` must not override an explicit `/rename`.
+ * Later lines of the same rank do win, since a second `/rename` supersedes
+ * the first.
+ */
+export async function readSessionTitle(filePath: string): Promise<string | null> {
+  const { title } = await readSessionTranscriptFacts(filePath);
+  return title ?? null;
+}
+
+/**
+ * Every label a transcript could have supplied, not just the winning one.
+ *
+ * The old synchronizer seeded `sessions.custom_name` from whichever of
+ * `custom-title`, `ai-title` or `last-prompt` it found first, or from
+ * `history.jsonl`'s `display`. Recognising a stored name as one of those is
+ * what distinguishes a label the app generated from one a person typed.
+ */
+export async function readSessionTitleCandidates(filePath: string): Promise<Set<string>> {
+  const candidates = new Set<string>();
+
+  try {
+    const fileStream = fs.createReadStream(filePath);
+    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of lineReader) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      for (const field of ['customTitle', 'aiTitle', 'lastPrompt'] as const) {
+        const value = data[field];
+        if (typeof value === 'string' && value.trim()) {
+          candidates.add(value.trim());
+        }
+      }
+    }
+  } catch {
+    return candidates;
+  }
+
+  return candidates;
+}
+
+/**
+ * Records a rename into the transcript itself, as Claude's `/rename` does.
+ *
+ * Writing here rather than only into the app database makes a rename portable:
+ * it shows up in `claude --resume`, survives a database rebuild, and is
+ * re-derived like any other transcript fact. Appending is safe alongside a
+ * running session because the format is append-only JSONL and this adds one
+ * complete line.
+ *
+ * Note this changes the file's mtime — harmless only because session recency
+ * now comes from message timestamps rather than file metadata.
+ */
+export async function appendSessionCustomTitle(
+  filePath: string,
+  sessionId: string,
+  customTitle: string
+): Promise<boolean> {
+  const trimmedTitle = customTitle.trim();
+  if (!trimmedTitle) {
+    return false;
+  }
+
+  // Refuse to write outside the configured provider home. Transcript paths come
+  // from the database, so an isolated run against a copied database would
+  // otherwise reach straight back into the user's real transcripts.
+  if (!isInsideClaudeHome(filePath)) {
+    console.warn(
+      `Refusing to write a session title outside CLAUDE_HOME (${getClaudeHome()}): ${filePath}`
+    );
+    return false;
+  }
+
+  try {
+    // Read only the final byte to decide whether a leading newline is needed.
+    // Transcripts reach multiple megabytes, and loading one entirely just to
+    // test its last character is wasteful.
+    const { size } = await stat(filePath);
+    let needsLeadingNewline = false;
+
+    if (size > 0) {
+      const handle = await open(filePath, 'r');
+      try {
+        const tail = Buffer.alloc(1);
+        await handle.read(tail, 0, 1, size - 1);
+        needsLeadingNewline = tail.toString('utf8') !== '\n';
+      } finally {
+        await handle.close();
+      }
+    }
+
+    const line = JSON.stringify({ type: 'custom-title', customTitle: trimmedTitle, sessionId });
+    await appendFile(filePath, `${needsLeadingNewline ? '\n' : ''}${line}\n`, 'utf8');
+    return true;
+  } catch {
+    // A session with no transcript yet (or an unreadable one) keeps its rename
+    // in the database only; the caller falls back to that path.
+    return false;
+  }
+}
+
+/**
+ * Session timestamps sourced from conversation content where possible, falling
+ * back to filesystem metadata per-field for transcripts that lack timestamps.
+ */
+export async function readSessionTimestamps(
+  filePath: string
+): Promise<{ createdAt?: string; updatedAt?: string }> {
+  const [activityTimestamps, fileTimestamps] = await Promise.all([
+    readSessionActivityTimestamps(filePath),
+    readFileTimestamps(filePath),
+  ]);
+
+  return {
+    createdAt: activityTimestamps.createdAt ?? fileTimestamps.createdAt,
+    updatedAt: activityTimestamps.updatedAt ?? fileTimestamps.updatedAt,
+  };
 }
 
 // ---------------------------

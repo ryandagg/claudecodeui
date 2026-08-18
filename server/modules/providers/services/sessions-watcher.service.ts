@@ -1,4 +1,3 @@
-import os from 'node:os';
 import path from 'node:path';
 import { promises as fsPromises } from 'node:fs';
 
@@ -8,15 +7,21 @@ import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { sessionIndexService } from '@/modules/providers/services/session-index.service.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+import { getClaudeHome } from '@/shared/utils.js';
 import type { LLMProvider } from '@/shared/types.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
 
 type WatcherEventType = 'add' | 'change';
 
-const PROVIDER_WATCH_PATHS: Array<{ provider: LLMProvider; rootPath: string }> = [
+/**
+ * Resolved per call rather than at module load so the watch root cannot drift
+ * from the synchronizer's, which reads the same setting. The two disagreeing
+ * would mean watching one tree and indexing another.
+ */
+const getProviderWatchPaths = (): Array<{ provider: LLMProvider; rootPath: string }> => [
   {
     provider: 'claude',
-    rootPath: path.join(os.homedir(), '.claude', 'projects'),
+    rootPath: path.join(getClaudeHome(), 'projects'),
   },
 ];
 
@@ -277,7 +282,7 @@ export async function initializeSessionsWatcher(): Promise<void> {
       console.error('Session search index backfill failed', { error: message });
     });
 
-  for (const { provider, rootPath } of PROVIDER_WATCH_PATHS) {
+  for (const { provider, rootPath } of getProviderWatchPaths()) {
     try {
       await fsPromises.mkdir(rootPath, { recursive: true });
 

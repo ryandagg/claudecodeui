@@ -15,6 +15,36 @@ function normalizeProjectDisplayName(projectPath: string, customProjectName: str
 }
 
 export const projectsDb = {
+    /**
+     * Records a project path without touching any user-owned state.
+     *
+     * Use this wherever a project row is a side effect rather than the user's
+     * intent — session discovery, app session creation, migrations. Unlike
+     * {@link createProjectPath} it cannot reactivate an archived project, so a
+     * project the user archived stays archived even though sessions inside it
+     * keep being indexed.
+     */
+    ensureProjectPath(projectPath: string): ProjectRepositoryRow | null {
+        const db = getConnection();
+        const normalizedProjectPath = normalizeProjectPath(projectPath);
+        const normalizedProjectName = normalizeProjectDisplayName(normalizedProjectPath, null);
+
+        db.prepare(`
+        INSERT INTO projects (project_id, project_path, custom_project_name, isArchived)
+            VALUES (?, ?, ?, 0)
+            ON CONFLICT(project_path) DO NOTHING
+        `).run(randomUUID(), normalizedProjectPath, normalizedProjectName);
+
+        return projectsDb.getProjectPath(normalizedProjectPath);
+    },
+
+    /**
+     * Creates a project at the user's explicit request.
+     *
+     * Reactivating an archived path is intentional here: the user asked for
+     * this project to exist again. Passive callers must use
+     * {@link ensureProjectPath} instead.
+     */
     createProjectPath(projectPath: string, customProjectName: string | null = null): CreateProjectPathResult {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);

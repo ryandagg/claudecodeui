@@ -1047,6 +1047,11 @@ export function useSidebarController({
         const response = await api.renameSession(sessionId, trimmed);
         if (response.ok) {
           await onRefresh();
+        } else if (response.status === 409) {
+          // The session has no transcript yet, so there is nowhere to store a
+          // rename. Retrying cannot help until a message is sent, which the
+          // generic failure message would wrongly imply.
+          alert(t('tooltips.renameNeedsTranscript'));
         } else {
           console.error('[Sidebar] Failed to rename session:', response.status);
           alert(t('messages.renameSessionFailed'));

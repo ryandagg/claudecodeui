@@ -158,6 +158,9 @@ export default function SidebarConversationList({
         const menuOpen = openMenuFor === session.id;
 
         const isStarred = isSessionStarred(session);
+        // A rename is written into the transcript, so a session the provider
+        // has not written yet has nowhere to store one.
+        const canRename = Boolean(session.jsonlPath);
 
         const select = () => {
           onProjectSelect(project);
@@ -298,13 +301,19 @@ export default function SidebarConversationList({
                       'flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40',
                       // Only the star pins open on a starred row; edit stays hover-only.
                       isStarred && !menuOpen ? 'opacity-0 group-hover:opacity-100 transition-opacity duration-200' : '',
+                      canRename ? '' : 'cursor-not-allowed opacity-40 hover:bg-gray-50 dark:hover:bg-gray-900/20',
                     )}
+                    // A rename is stored in the transcript so it stays visible to
+                    // Claude's own CLI. Until the provider writes one there is
+                    // nowhere to put it, so the control is disabled rather than
+                    // accepting a name it would have to discard.
+                    disabled={!canRename}
                     onClick={(event) => {
                       event.stopPropagation();
                       setOpenMenuFor(null);
                       onStartEditingSession(session.id, view.sessionName);
                     }}
-                    title={t('tooltips.editSessionName')}
+                    title={canRename ? t('tooltips.editSessionName') : t('tooltips.renameNeedsTranscript')}
                   >
                     <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
                   </button>

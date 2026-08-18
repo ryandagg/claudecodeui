@@ -19,8 +19,8 @@ import os from 'os';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-import { resolveAutoCompactContext } from './modules/compaction/auto-compact-context.js';
 import { CLAUDE_FALLBACK_MODELS } from './modules/providers/list/claude/claude-models.provider.js';
+import { extractTokenBudget } from './modules/providers/list/claude/claude-token-budget.js';
 import { providerModelsService } from './modules/providers/services/provider-models.service.js';
 import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
 import {
@@ -40,6 +40,16 @@ const pendingToolApprovals = new Map();
 // terminal `complete` (aborted: true) to the client, so the run loop must not
 // emit a second one when its generator winds down.
 const abortedSessionIds = new Set();
+
+// Auto-compaction threshold cache, keyed by the config it depends on
+// (model + the user's session env overrides). The threshold is what the CLI's
+// own getContextUsage() reports — it depends only on the window/model/reserves,
+// NOT on session content — so one resolution serves every session on the same
+// config. `resolveAutoCompactThresholdViaIdleQuery` spawns a short-lived idle
+// query to read it (the CLI only answers that control request when idle, which a
+// live single-turn query races), and the inflight map dedupes concurrent reads.
+const autoCompactThresholdCache = new Map();
+const autoCompactThresholdInflight = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
@@ -254,6 +264,104 @@ function mapCliOptionsToSDK(options = {}) {
 }
 
 /**
+ * Cache key for the auto-compaction threshold. It depends only on the model and
+ * the user's session-env overrides (the window/reserves/limit inputs) — not the
+ * session — so sessions sharing those share a resolved threshold.
+ */
+function autoCompactConfigKey(options = {}) {
+  const model = options.model && options.model !== 'default' ? options.model : 'default';
+  const hasEnv = options.sessionEnv && Object.keys(options.sessionEnv).length > 0;
+  return `${model}::${hasEnv ? JSON.stringify(options.sessionEnv) : ''}`;
+}
+
+/**
+ * Reads Claude Code's real auto-compaction threshold by spawning a short-lived,
+ * idle query and asking the CLI for it via getContextUsage(). The CLI computes
+ * the threshold (window, reserves, model limit, pct override) so the app never
+ * mirrors that math and can't drift when the CLI changes it.
+ *
+ * Uses the SAME option builder as a real run so the env/settings precedence — and
+ * thus the threshold — matches actual turns, but drops `resume`: the threshold is
+ * independent of session content, so a fresh (empty) query resolves it without the
+ * cost of loading a transcript. The input stream never yields, so the query stays
+ * idle (no user turn, no model call) and the CLI stays alive to answer the request.
+ *
+ * @returns {Promise<number|null>} the threshold, or null if auto-compact is
+ *   disabled or the CLI can't report it (caller falls back to a raw token count).
+ */
+async function resolveAutoCompactThresholdViaIdleQuery(options = {}, timeoutMs = 15000) {
+  const sdkOptions = mapCliOptionsToSDK(options);
+  delete sdkOptions.resume;
+
+  let inputDone = false;
+  async function* idleInput() {
+    while (!inputDone) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  const idleQuery = query({ prompt: idleInput(), options: sdkOptions });
+  try {
+    const contextUsage = await Promise.race([
+      idleQuery.getContextUsage(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('getContextUsage timeout')), timeoutMs)),
+    ]);
+    if (
+      contextUsage?.isAutoCompactEnabled &&
+      typeof contextUsage.autoCompactThreshold === 'number' &&
+      contextUsage.autoCompactThreshold > 0
+    ) {
+      return contextUsage.autoCompactThreshold;
+    }
+    return null;
+  } finally {
+    inputDone = true;
+    try {
+      idleQuery.close();
+    } catch {
+      // Ignore teardown errors on a throwaway query.
+    }
+  }
+}
+
+/**
+ * Synchronously returns a cached auto-compaction threshold for the given config,
+ * or null if none has been resolved yet. Never spawns a query.
+ */
+function peekAutoCompactThreshold(options = {}) {
+  const key = autoCompactConfigKey(options);
+  return autoCompactThresholdCache.has(key) ? autoCompactThresholdCache.get(key) : null;
+}
+
+/**
+ * Returns the auto-compaction threshold for the given config, resolving it via a
+ * one-off idle query on a cache miss (deduped across concurrent callers). Only
+ * positive results are cached, so a transient failure retries on the next call.
+ */
+async function getAutoCompactThreshold(options = {}) {
+  const key = autoCompactConfigKey(options);
+  if (autoCompactThresholdCache.has(key)) {
+    return autoCompactThresholdCache.get(key);
+  }
+  if (autoCompactThresholdInflight.has(key)) {
+    return autoCompactThresholdInflight.get(key);
+  }
+  const inflight = resolveAutoCompactThresholdViaIdleQuery(options)
+    .then((threshold) => {
+      if (typeof threshold === 'number' && threshold > 0) {
+        autoCompactThresholdCache.set(key, threshold);
+      }
+      return threshold;
+    })
+    .catch(() => null)
+    .finally(() => {
+      autoCompactThresholdInflight.delete(key);
+    });
+  autoCompactThresholdInflight.set(key, inflight);
+  return inflight;
+}
+
+/**
  * Adds a session to the active sessions map
  * @param {string} sessionId - Session identifier
  * @param {Object} queryInstance - SDK query instance
@@ -310,78 +418,6 @@ function transformMessage(sdkMessage) {
     };
   }
   return sdkMessage;
-}
-
-function readNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/**
- * Extracts token usage from SDK messages.
- * Prefers per-step `message.usage` (Claude message payload), then falls back
- * to result-level usage/modelUsage for compatibility across SDK versions.
- * @param {Object} sdkMessage - SDK stream message
- * @returns {Object|null} Token budget object or null
- */
-function extractTokenBudget(sdkMessage) {
-  if (!sdkMessage || typeof sdkMessage !== 'object') {
-    return null;
-  }
-
-  const messageUsage = sdkMessage.message?.usage || sdkMessage.usage;
-  if (messageUsage && typeof messageUsage === 'object') {
-    const directInputTokens = readNumber(messageUsage.input_tokens ?? messageUsage.inputTokens);
-    const cacheCreationTokens = readNumber(messageUsage.cache_creation_input_tokens ?? messageUsage.cacheCreationInputTokens ?? messageUsage.cacheCreationTokens);
-    const cacheReadTokens = readNumber(messageUsage.cache_read_input_tokens ?? messageUsage.cacheReadInputTokens ?? messageUsage.cacheReadTokens);
-    const cacheTokens = cacheCreationTokens + cacheReadTokens;
-    const inputTokens = directInputTokens + cacheTokens;
-    const outputTokens = readNumber(messageUsage.output_tokens ?? messageUsage.outputTokens);
-    const totalUsed = inputTokens + outputTokens;
-    const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
-
-    return {
-      used: totalUsed,
-      total: contextWindow,
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheCreationTokens,
-      cacheTokens,
-      breakdown: {
-        input: inputTokens,
-        output: outputTokens,
-      },
-    };
-  }
-
-  if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== 'object') {
-    return null;
-  }
-
-  // Fallback for older SDK messages with only modelUsage
-  const modelKey = Object.keys(sdkMessage.modelUsage)[0];
-  const modelData = sdkMessage.modelUsage[modelKey];
-
-  if (!modelData || typeof modelData !== 'object') {
-    return null;
-  }
-
-  const inputTokens = readNumber(modelData.cumulativeInputTokens ?? modelData.inputTokens);
-  const outputTokens = readNumber(modelData.cumulativeOutputTokens ?? modelData.outputTokens);
-  const totalUsed = inputTokens + outputTokens;
-  const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
-
-  return {
-    used: totalUsed,
-    total: contextWindow,
-    inputTokens,
-    outputTokens,
-    breakdown: {
-      input: inputTokens,
-      output: outputTokens,
-    },
-  };
 }
 
 /**
@@ -557,10 +593,20 @@ async function queryClaudeSDK(command, options = {}, ws) {
       options.model,
     );
 
-    // Auto-compaction threshold is static for the run (window/pct/reserves/model
-    // are all fixed once the model is resolved), so compute it once here and
-    // stamp it onto every token-budget update the loop emits below.
-    const autoCompactContext = await resolveAutoCompactContext(resolvedModel || options.model || null);
+    // Auto-compaction threshold for the "% until auto-compact" button, resolved
+    // from the CLI via a cached idle query (see getAutoCompactThreshold). The
+    // threshold depends on this run's model plus the session env overrides.
+    const autoCompactOptions = {
+      model: resolvedModel || options.model,
+      cwd: options.cwd,
+      sessionEnv: options.sessionEnv,
+      permissionMode: options.permissionMode,
+      effort: options.effort,
+      effortModels: options.effortModels,
+    };
+    let autoCompactThreshold = peekAutoCompactThreshold(autoCompactOptions);
+    let autoCompactChecked = false;
+    let lastTokenBudgetData = null;
 
     let effortModels = CLAUDE_FALLBACK_MODELS;
     try {
@@ -774,12 +820,29 @@ async function queryClaudeSDK(command, options = {}, ws) {
       // before auto-compaction" instead of a raw token count.
       const tokenBudgetData = extractTokenBudget(message);
       if (tokenBudgetData) {
-        const tokenBudget = {
-          ...tokenBudgetData,
-          autoCompactThreshold: autoCompactContext.autoCompactThreshold,
-          contextWindow: autoCompactContext.contextWindow,
-        };
-        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        lastTokenBudgetData = tokenBudgetData;
+        const budgetKey = capturedSessionId || sessionId || null;
+
+        // Resolve the threshold once per run via the cached idle-query resolver.
+        // Non-blocking so it never stalls the stream; on success we stamp it and
+        // re-emit the latest budget so the button updates in place. Cached by
+        // config, so this only spawns a query on the first run of a new config.
+        if (autoCompactThreshold === null && !autoCompactChecked) {
+          autoCompactChecked = true;
+          getAutoCompactThreshold(autoCompactOptions).then((threshold) => {
+            if (typeof threshold === 'number' && threshold > 0 && autoCompactThreshold === null) {
+              autoCompactThreshold = threshold;
+              if (lastTokenBudgetData) {
+                ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: { ...lastTokenBudgetData, autoCompactThreshold }, sessionId: budgetKey, provider: 'claude' }));
+              }
+            }
+          }).catch(() => {
+            // Leave the raw-count fallback in place on failure.
+          });
+        }
+
+        const tokenBudget = { ...tokenBudgetData, autoCompactThreshold };
+        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, sessionId: budgetKey, provider: 'claude' }));
       }
     }
 
@@ -961,5 +1024,7 @@ export {
   getActiveClaudeSDKSessions,
   resolveToolApproval,
   getPendingApprovalsForSession,
-  reconnectSessionWriter
+  reconnectSessionWriter,
+  getAutoCompactThreshold,
+  peekAutoCompactThreshold
 };

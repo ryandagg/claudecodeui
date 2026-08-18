@@ -14,6 +14,7 @@ import {
   highlightQueryInElement,
   scrollRangeIntoView,
 } from '../utils/inChatHighlight';
+import { mergeStickyThreshold } from '../view/subcomponents/tokenUsage';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -276,7 +277,24 @@ export function useChatSessionState({
   // viewport to the bottom while the user is reading older messages. This ref
   // is written synchronously in the scroll handler and read by that effect.
   const isUserScrolledUpRef = useRef(false);
-  const [tokenBudget, setTokenBudget] = useState<Record<string, unknown> | null>(null);
+  const [tokenBudget, setTokenBudgetState] = useState<Record<string, unknown> | null>(null);
+  // The auto-compaction threshold is a stable per-session property — it depends
+  // on the model + env, not the conversation — but not every budget update
+  // carries it. A live run stamps it once the CLI reports it (via getContextUsage);
+  // the REST load/refetch only includes it on a warm cache. Treat it as sticky
+  // within a session so a threshold-less update (e.g. a post-turn REST refetch
+  // whose cache key hasn't warmed yet) still renders "%", never dropping back to
+  // a raw count. The ref resets through the `setTokenBudget(null)` calls made on
+  // session change.
+  const lastAutoCompactThresholdRef = useRef<number | null>(null);
+  const setTokenBudget = useCallback((budget: Record<string, unknown> | null) => {
+    const { budget: next, remembered } = mergeStickyThreshold(
+      budget,
+      lastAutoCompactThresholdRef.current,
+    );
+    lastAutoCompactThresholdRef.current = remembered;
+    setTokenBudgetState(next);
+  }, []);
   const [visibleMessageCount, setVisibleMessageCount] = useState(INITIAL_VISIBLE_MESSAGES);
   const [searchWindow, setSearchWindow] = useState<{ start: number; end: number } | null>(null);
   const [allMessagesLoaded, setAllMessagesLoaded] = useState(false);
@@ -411,7 +429,7 @@ export function useChatSessionState({
       clearTimeout(loadAllFinishedTimerRef.current);
       loadAllFinishedTimerRef.current = null;
     }
-  }, [cancelSearchNavigation, newSessionTrigger, onSessionIdle, resetStreamingState]);
+  }, [cancelSearchNavigation, newSessionTrigger, onSessionIdle, resetStreamingState, setTokenBudget]);
 
   /* ---------------------------------------------------------------- */
   /*  Derive processing state for the viewed session                  */
@@ -1046,7 +1064,7 @@ export function useChatSessionState({
       }
     };
     fetchInitialTokenUsage();
-  }, [selectedProject, selectedSession?.id]);
+  }, [selectedProject, selectedSession?.id, setTokenBudget]);
 
   const visibleMessages = useMemo(() => {
     if (searchWindow) {

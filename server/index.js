@@ -23,7 +23,7 @@ import {
     validateWorkspacePath,
 } from '@/shared/utils.js';
 import { closeSessionsWatcher, initializeSessionsWatcher } from '@/modules/providers/index.js';
-import { createWebSocketServer } from '@/modules/websocket/index.js';
+import { createWebSocketServer, readSessionEnv } from '@/modules/websocket/index.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -33,8 +33,9 @@ import {
     abortClaudeSDKSession,
     resolveToolApproval,
     getPendingApprovalsForSession,
+    getAutoCompactThreshold,
+    peekAutoCompactThreshold,
 } from './claude-sdk.js';
-import { resolveAutoCompactContext } from './modules/compaction/auto-compact-context.js';
 import {
     stripAnsiSequences,
     normalizeDetectedUrl,
@@ -1512,8 +1513,8 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
         let outputTokens = 0;
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
-        // Model of the latest assistant turn, used to resolve the auto-compaction
-        // threshold below (only matters when no explicit window env/setting wins).
+        // Model of the latest assistant turn — the config the auto-compaction
+        // threshold below is resolved for.
         let sessionModel = null;
 
         // Find the latest assistant message with usage data (scan from end)
@@ -1544,19 +1545,20 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
         const totalUsed = inputTokens + outputTokens;
         const cacheTokens = cacheReadTokens + cacheCreationTokens;
 
-        // Resolve Claude Code's real auto-compaction threshold so the initial
-        // fetch carries the same percentage the live WebSocket budget does (the
-        // button would otherwise show a raw count until the first stream update).
-        // resolveAutoCompactContext already degrades to null on a settings read
-        // failure; guard anyway so a resolution error can't turn this into a 500.
-        let autoCompactThreshold = null;
-        let resolvedContextWindow = null;
-        try {
-            const autoCompactContext = await resolveAutoCompactContext(sessionModel);
-            autoCompactThreshold = autoCompactContext.autoCompactThreshold;
-            resolvedContextWindow = autoCompactContext.contextWindow;
-        } catch (thresholdError) {
-            // Leave both null — the client falls back to a raw token count.
+        // Auto-compaction threshold for the "% until auto-compact" button. It's
+        // resolved by the CLI (see claude-sdk.js) and cached by config, so on load
+        // we can only stamp it synchronously when it's already cached (from an
+        // earlier run/load of the same model+env). On a cache miss we kick off a
+        // background resolution — non-blocking, so session load stays fast — which
+        // warms the cache for the next load; this load falls back to a raw count.
+        const autoCompactOptions = {
+            model: sessionModel,
+            cwd: projectPath,
+            sessionEnv: readSessionEnv(req.user?.id ?? null),
+        };
+        const autoCompactThreshold = peekAutoCompactThreshold(autoCompactOptions);
+        if (autoCompactThreshold === null) {
+            getAutoCompactThreshold(autoCompactOptions).catch(() => {});
         }
 
         res.json({
@@ -1568,7 +1570,6 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
             cacheCreationTokens,
             cacheTokens,
             autoCompactThreshold,
-            contextWindow: resolvedContextWindow,
             breakdown: {
                 input: inputTokens,
                 output: outputTokens

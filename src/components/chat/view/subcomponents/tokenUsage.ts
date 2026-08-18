@@ -3,14 +3,48 @@
  * percentage logic can be unit-tested without a DOM.
  *
  * The button prefers to show how much of the pre-auto-compaction budget is used
- * (`autoCompactThreshold`, computed server-side to match Claude Code's real
- * trigger). When no threshold is available — non-Claude providers, or before the
- * first budget update — it falls back to a formatted raw token count.
+ * (`autoCompactThreshold`, reported by the Claude Code CLI via the SDK's
+ * getContextUsage() and relayed on the token-budget stream). When no threshold is
+ * available — non-Claude providers, or before the first budget update of a run
+ * (e.g. right after opening a session) — it falls back to a formatted raw count.
  */
 
 export const readUsageNumber = (value: unknown): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+/**
+ * Merges a stable auto-compaction threshold across token-budget updates.
+ *
+ * The threshold depends on the model + env, not the conversation, so it's a
+ * stable per-session property — but not every update carries it. A live run
+ * stamps it once the CLI reports it; a REST load/refetch only includes it on a
+ * warm cache. Without stickiness, a threshold-less update (e.g. a post-turn REST
+ * refetch whose cache key hasn't warmed) would drop the button from "%" back to
+ * a raw count. This remembers the last positive threshold so the display only
+ * upgrades to "%", never regresses — while a fresh positive threshold (e.g. after
+ * a mid-session model change) still replaces the remembered one.
+ *
+ * @param incoming the new budget (or null to reset, e.g. on session change)
+ * @param remembered the last positive threshold seen this session, or null
+ * @returns the budget to store and the threshold to remember next
+ */
+export const mergeStickyThreshold = (
+  incoming: Record<string, unknown> | null,
+  remembered: number | null,
+): { budget: Record<string, unknown> | null; remembered: number | null } => {
+  if (incoming === null) {
+    return { budget: null, remembered: null };
+  }
+  const incomingThreshold = readUsageNumber(incoming.autoCompactThreshold);
+  if (incomingThreshold > 0) {
+    return { budget: incoming, remembered: incomingThreshold };
+  }
+  if (remembered && remembered > 0) {
+    return { budget: { ...incoming, autoCompactThreshold: remembered }, remembered };
+  }
+  return { budget: incoming, remembered };
 };
 
 /** Compact human-readable token count, e.g. 1.2K / 34K / 1.5M. */

@@ -107,7 +107,7 @@ function readRequiredSessionId(data: AnyRecord): string | null {
  * "no overrides" rather than failing the run. Non-string values are coerced so
  * a numeric-looking entry (e.g. a compact window) still reaches the SDK.
  */
-function readSessionEnv(userId: string | number | null): Record<string, string> {
+export function readSessionEnv(userId: string | number | null): Record<string, string> {
   if (userId === null) {
     return {};
   }

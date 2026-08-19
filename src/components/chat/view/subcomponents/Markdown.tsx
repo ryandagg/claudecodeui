@@ -10,6 +10,8 @@ import { useTranslation } from 'react-i18next';
 import { normalizeInlineCodeFences } from '../../utils/chatFormatting';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
+import { MermaidDiagram } from '../../../markdown/MermaidDiagram';
+import { isMermaidCodeNode } from '../../../markdown/mermaidConfig';
 
 type MarkdownProps = {
   children: React.ReactNode;
@@ -131,7 +133,7 @@ const CodeBlock = ({ node, inline, className, children, onOpenFileRef, ...props 
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : 'text';
 
-  return (
+  const codeBlock = (
     <div className="group relative my-2">
       {language && language !== 'text' && (
         <div className="absolute left-3 top-2 z-10 text-xs font-medium uppercase text-gray-400">{language}</div>
@@ -201,10 +203,24 @@ const CodeBlock = ({ node, inline, className, children, onOpenFileRef, ...props 
       </SyntaxHighlighter>
     </div>
   );
+
+  if (language === 'mermaid') {
+    return <MermaidDiagram code={raw} fallback={codeBlock} />;
+  }
+
+  return codeBlock;
 };
 
 const markdownComponents = {
   code: CodeBlock,
+  // A mermaid fence is rendered as a diagram, so drop the dark `.prose` <pre>
+  // wrapper that would otherwise box it; other code fences keep the default pre.
+  pre: ({ node, children, ...props }: { node?: unknown; children?: React.ReactNode }) =>
+    isMermaidCodeNode(node) ? (
+      <div className="not-prose">{children}</div>
+    ) : (
+      <pre {...props}>{children}</pre>
+    ),
   blockquote: ({ children }: { children?: React.ReactNode }) => (
     <blockquote className="my-2 border-l-4 border-gray-300 pl-4 italic text-gray-600 dark:border-gray-600 dark:text-gray-400">
       {children}

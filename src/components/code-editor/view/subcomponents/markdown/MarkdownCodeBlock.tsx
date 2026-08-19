@@ -4,6 +4,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark as prismOneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 import { copyTextToClipboard } from '../../../../../utils/clipboard';
+import { MermaidDiagram } from '../../../../markdown/MermaidDiagram';
 
 type MarkdownCodeBlockProps = {
   inline?: boolean;
@@ -36,7 +37,7 @@ export default function MarkdownCodeBlock({
   const languageMatch = /language-(\w+)/.exec(className || '');
   const language = languageMatch ? languageMatch[1] : 'text';
 
-  return (
+  const codeBlock = (
     <div className="group relative my-2">
       {language !== 'text' && (
         <div className="absolute left-3 top-2 z-10 text-xs font-medium uppercase text-gray-400">{language}</div>
@@ -70,4 +71,10 @@ export default function MarkdownCodeBlock({
       </SyntaxHighlighter>
     </div>
   );
+
+  if (language === 'mermaid') {
+    return <MermaidDiagram code={rawContent} fallback={codeBlock} />;
+  }
+
+  return codeBlock;
 }

@@ -5,6 +5,8 @@ import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 
+import { isMermaidCodeNode } from '../../../../markdown/mermaidConfig';
+
 import MarkdownCodeBlock from './MarkdownCodeBlock';
 
 type MarkdownPreviewProps = {
@@ -13,6 +15,14 @@ type MarkdownPreviewProps = {
 
 const markdownPreviewComponents: Components = {
   code: MarkdownCodeBlock,
+  // A mermaid fence renders as a diagram, so drop the dark `.prose` <pre>
+  // wrapper that would otherwise box it; other code fences keep the default pre.
+  pre: ({ node, children, ...props }) =>
+    isMermaidCodeNode(node) ? (
+      <div className="not-prose">{children}</div>
+    ) : (
+      <pre {...props}>{children}</pre>
+    ),
   blockquote: ({ children }) => (
     <blockquote className="my-2 border-l-4 border-gray-300 pl-4 italic text-gray-600 dark:border-gray-600 dark:text-gray-400">
       {children}

@@ -118,6 +118,21 @@ export async function readClaudeModel(): Promise<string | null> {
     : null;
 }
 
+/**
+ * Reads the top-level `apiKeyHelper` command from the user settings file.
+ *
+ * Claude Code runs this command to mint a short-lived model-gateway API key. The
+ * app reuses it to authenticate its own read-only call to the gateway's
+ * `/v1/models` catalog (for per-model context-window limits). `null` when the key
+ * is absent — e.g. a non-gateway setup that authenticates some other way.
+ */
+export async function readClaudeApiKeyHelper(): Promise<string | null> {
+  const settings = await readJsonConfig(userSettingsPath());
+  return typeof settings.apiKeyHelper === 'string' && settings.apiKeyHelper.trim()
+    ? settings.apiKeyHelper.trim()
+    : null;
+}
+
 function dedupe(items: string[]): string[] {
   return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
 }

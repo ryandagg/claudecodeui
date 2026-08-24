@@ -27,7 +27,7 @@
   "scripts": {
     "predev": "npm install",
     "dev": "node scripts/dev.js",
-    "dev:human-user": "(kill -9 $(lsof -i:5183 -t) 2>/dev/null || true) && (kill -9 $(lsof -i:3021 -t) 2>/dev/null || true) && SERVER_PORT=3021 VITE_PORT=5183 npm run dev",
+    "dev:human-user": "(kill -9 $(lsof -i:5183 -t) 2>/dev/null || true) && (kill -9 $(lsof -i:3021 -t) 2>/dev/null || true) && SERVER_PORT=3021 VITE_PORT=5183 concurrently --kill-others-on-fail -n server,client \"npm run server:dev-watch\" \"npm run client\"",
     "dev:no-watch": "node scripts/dev.js --no-watch",
     "server": "node dist-server/server/index.js",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",

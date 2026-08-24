@@ -46,28 +46,33 @@ git branch -D <branch>  # only if the user confirms deletion
    All three must pass. Do NOT skip lint — deleted files leave dangling imports that tsc misses but Vite catches at runtime. `npm test` is fast (no browser, no server) and catches logic regressions the browser pass may not exercise; it is a required gate, not optional. tsx erases types at runtime, so a test can pass while typecheck still fails on it — that's why all three run.
 6. **Verify with User**
    Provide URL to running app and QA plan from prior step. Get approval for next steps.
-7. **Merge to main** (from the main worktree):
+7. **Push & open a PR** (from the worktree):
+   ```sh
+   git push -u origin feat/<short-slug>
+   gh pr create --base main --fill
+   ```
+   If `main` moved since you branched, rebase before pushing:
+   ```sh
+   git fetch origin && git rebase origin/main
+   ```
+   CI runs lint, typecheck, and tests on the PR (`.github/workflows/ci.yml`) — the change isn't done until those checks are green. A human reviews and merges the PR; don't merge to `main` yourself.
+8. **Clean up** (once the PR has merged):
    ```sh
    cd /Users/rdagg/Documents/repos/claudecodeui
-   git merge feat/<short-slug> --ff-only
-   ```
-   If fast-forward fails (main moved): rebase the feature branch in the worktree first.
-8. **Clean up:**
-   ```sh
    git worktree remove ../worktrees/<short-slug>
-   git branch -d feat/<short-slug>
+   git branch -D feat/<short-slug>   # merged on GitHub, so the local branch won't show as merged to git
    ```
 
 ### Multiple sessions working concurrently
 - Each session uses a **unique branch + worktree** (e.g. `../worktrees/reactions`, `../worktrees/sidebar-fix`).
-- Merges to main happen one at a time. If main moved, rebase before merging.
-- The dev server picks up changes naturally on merge (tsx watches `server/`, Vite HMRs frontend).
+- Each session opens its own PR. If `main` moved, rebase the feature branch on `origin/main` before pushing. A human merges the PRs one at a time.
+- Once a PR merges into the branch the human runs, the dev server picks up the changes (tsx watches `server/`, Vite HMRs frontend).
 - dev server ports are now handled via script. Check logs after any server restart for URL.
 
 ### Edge case: already editing in main worktree
 
 - If you realize mid-edit that you're in main: `git stash -u`, create the worktree, `git stash pop` inside it, continue there.
-- If the edit is done and compiles cleanly: commit directly (no worktree needed for a completed atomic change).
+- If the edit is done and compiles cleanly: branch, commit, and push + open a PR directly — no worktree needed for a completed atomic change. Still don't merge to `main` yourself; let the PR be the path in.
 
 ## Architecture
 
@@ -96,8 +101,8 @@ npm test -- <path>       # limit to matching files while iterating
 - Server routes use relative imports (`'../modules/database/index.js'`)
 - Repository pattern: one file per entity in `server/modules/database/repositories/`
 - Client API calls via `src/utils/api.js` using `authenticatedFetch`
-- TypeScript strict, no build errors tolerated before merge
-- Tests via `node:test` + `tsx` (no jest/vitest); colocated in `tests/` dirs. `npm test` is part of the pre-merge gate — see **Testing**
+- TypeScript strict, no build errors tolerated before opening a PR
+- Tests via `node:test` + `tsx` (no jest/vitest); colocated in `tests/` dirs. `npm test` is part of the pre-PR gate that CI enforces on every pull request — see **Testing**
 - **Claude *config* lives in `~/.claude/settings.json` — the app never mirrors it.** Config is the global default the terminal `claude` reads too: `model`, `permissions`, `hooks`, `env`. The Agent SDK enforces it via `settingSources`, so a parallel in-app copy is silently ignored and drifts. App-only UX (theme, notifications, editor prefs) stays in the app's DB.
 - **Per-session choices are *session state*, and the app owns them.** settings.json has no per-session concept, so a session-scoped model, permission mode, or cwd has nothing to duplicate. The SDK keeps these in process memory only — `/model` says "for this session only" and dies with the subprocess, and this app spawns a fresh `query({resume})` per message — so app-side persistence (`~/.cloudcli/provider-session-active-model-changes.json`) is required, not redundant.
 - **Deciding which you have: does settings.json own a key for this axis?** Yes → config, read it there. No → session state, the app store is the source of truth, layered at resolve time (session override → explicit request → omit and let settings.json answer).

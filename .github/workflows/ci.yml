@@ -1,0 +1,40 @@
+name: CI
+
+# Run the quality gate (lint, typecheck, tests) on every pull request,
+# regardless of which branch the PR targets.
+on:
+  pull_request:
+
+# Least privilege: these checks only need to read the repository.
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint, typecheck & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        # @vscode/ripgrep's postinstall downloads a prebuilt binary via the GitHub
+        # API; authenticate it so the runner's shared IP isn't rate-limited (HTTP 403).
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

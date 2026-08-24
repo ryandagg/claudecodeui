@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   parseModelLimits,
+  preferSettingsValue,
   resolveContextLimit,
 } from '@/modules/providers/list/claude/claude-model-limits.provider.js';
 
@@ -69,4 +70,29 @@ test('resolveContextLimit returns null for unknown models and empty input', () =
 
 test('resolveContextLimit against an empty map is always null', () => {
   assert.equal(resolveContextLimit({}, 'claude-opus-4-8'), null);
+});
+
+// ---------------------------------------------------------------------------
+// preferSettingsValue — settings.json `env` wins over the process env. This is
+// the cli-env-precedence trap: a server launched from a plain shell has neither
+// ANTHROPIC_BASE_URL nor NODE_EXTRA_CA_CERTS in its own environment (the SDK
+// injects them into the CLI from settings.json), so settings must be consulted.
+// ---------------------------------------------------------------------------
+test('preferSettingsValue prefers the settings value over the process env', () => {
+  assert.equal(
+    preferSettingsValue('https://gw.settings', 'https://gw.env'),
+    'https://gw.settings',
+  );
+});
+
+test('preferSettingsValue falls back to the process env when settings is absent/blank', () => {
+  assert.equal(preferSettingsValue(null, 'https://gw.env'), 'https://gw.env');
+  assert.equal(preferSettingsValue(undefined, 'https://gw.env'), 'https://gw.env');
+  assert.equal(preferSettingsValue('   ', 'https://gw.env'), 'https://gw.env');
+});
+
+test('preferSettingsValue trims, and returns null when neither is set', () => {
+  assert.equal(preferSettingsValue('  https://gw.settings  ', undefined), 'https://gw.settings');
+  assert.equal(preferSettingsValue(null, undefined), null);
+  assert.equal(preferSettingsValue('', ''), null);
 });

@@ -1,7 +1,10 @@
 import { exec } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import https from 'node:https';
+import { rootCertificates } from 'node:tls';
 import { promisify } from 'node:util';
 
-import { readClaudeApiKeyHelper } from './claude-settings.provider.js';
+import { readClaudeApiKeyHelper, readClaudeSettingsEnvValue } from './claude-settings.provider.js';
 
 /**
  * Per-model context-window limits, sourced from the model gateway's
@@ -15,9 +18,14 @@ import { readClaudeApiKeyHelper } from './claude-settings.provider.js';
  * hand-maintained table (even the gateway team's own curated config lagged at
  * 364K). So the app fetches the catalog once at startup and caches it.
  *
- * Auth reuses the same `apiKeyHelper` the Claude CLI runs to mint a gateway key;
- * the base URL is `ANTHROPIC_BASE_URL`. Both are config, so nothing is hardcoded,
- * and a setup without them simply falls back to a raw token count.
+ * Auth reuses the same `apiKeyHelper` the Claude CLI runs to mint a gateway key.
+ * The gateway base URL and its TLS trust bundle come from Claude's settings.json
+ * `env` (`ANTHROPIC_BASE_URL`, `NODE_EXTRA_CA_CERTS`) first, falling back to the
+ * process env: the CLI applies settings.json `env` over the shell, and a server
+ * started from a plain shell won't have these in its own environment at all. The
+ * request uses `node:https` (not the global `fetch`) so it can present that CA,
+ * which Node otherwise only loads from `NODE_EXTRA_CA_CERTS` at process startup.
+ * Nothing is hardcoded, and a setup without a gateway falls back to a raw count.
  */
 
 const execAsync = promisify(exec);
@@ -82,6 +90,23 @@ export function resolveContextLimit(
   return null;
 }
 
+/**
+ * Prefers a value from Claude's settings.json `env` over the process environment
+ * (see `readClaudeSettingsEnvValue`). Trims both; returns null when neither has a
+ * non-empty value. Used for the gateway base URL and the extra-CA path.
+ */
+export function preferSettingsValue(
+  settingsValue: string | null | undefined,
+  envValue: string | null | undefined,
+): string | null {
+  const fromSettings = typeof settingsValue === 'string' ? settingsValue.trim() : '';
+  if (fromSettings) {
+    return fromSettings;
+  }
+  const fromEnv = typeof envValue === 'string' ? envValue.trim() : '';
+  return fromEnv || null;
+}
+
 let limitsCache: Record<string, number> | null = null;
 let inflight: Promise<void> | null = null;
 
@@ -104,8 +129,69 @@ async function mintGatewayKey(): Promise<string | null> {
   }
 }
 
+/**
+ * Builds the additive CA list for the gateway request: Node's default roots plus
+ * the extra bundle at `NODE_EXTRA_CA_CERTS` (settings.json first, then the process
+ * env). This mirrors how `NODE_EXTRA_CA_CERTS` augments — rather than replaces —
+ * the trust store, which Node only reads at startup. Returns undefined (Node's
+ * defaults) when no bundle is configured or it can't be read.
+ */
+function resolveCaBundle(settingsCaPath: string | null): string[] | undefined {
+  const caPath = preferSettingsValue(settingsCaPath, process.env.NODE_EXTRA_CA_CERTS);
+  if (!caPath) {
+    return undefined;
+  }
+  try {
+    return [...rootCertificates, readFileSync(caPath, 'utf8')];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * One-shot HTTPS GET returning parsed JSON, or null on any non-2xx, timeout,
+ * transport, or parse error (the caller treats null as "no catalog"). Uses
+ * `node:https` rather than the global `fetch` so it can present a custom CA.
+ */
+function fetchJsonOverHttps(
+  url: string,
+  { key, ca, timeoutMs }: { key: string; ca: string[] | undefined; timeoutMs: number },
+): Promise<unknown> {
+  return new Promise((resolve) => {
+    const req = https.get(
+      url,
+      { headers: { Authorization: `Bearer ${key}` }, ca, agent: false },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.resume();
+          resolve(null);
+          return;
+        }
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
+    req.on('error', () => resolve(null));
+  });
+}
+
 async function fetchModelLimits(): Promise<Record<string, number> | null> {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
+  const baseUrl = preferSettingsValue(
+    await readClaudeSettingsEnvValue('ANTHROPIC_BASE_URL'),
+    process.env.ANTHROPIC_BASE_URL,
+  );
   if (!baseUrl) {
     return null; // no gateway configured: caller falls back to a raw token count
   }
@@ -114,23 +200,17 @@ async function fetchModelLimits(): Promise<Record<string, number> | null> {
     return null;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/models`, {
-      headers: { Authorization: `Bearer ${key}` },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return null;
-    }
-    const limits = parseModelLimits(await response.json());
-    return Object.keys(limits).length > 0 ? limits : null;
-  } catch {
+  const ca = resolveCaBundle(await readClaudeSettingsEnvValue('NODE_EXTRA_CA_CERTS'));
+  const body = await fetchJsonOverHttps(`${baseUrl.replace(/\/+$/, '')}/v1/models`, {
+    key,
+    ca,
+    timeoutMs: 20_000,
+  });
+  if (!body) {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
+  const limits = parseModelLimits(body);
+  return Object.keys(limits).length > 0 ? limits : null;
 }
 
 /**

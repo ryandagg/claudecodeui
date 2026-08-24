@@ -246,6 +246,16 @@ export type NormalizedMessage = {
   toolName?: string;
   toolInput?: unknown;
   toolId?: string;
+  /**
+   * Stable cross-path identity derived from the provider API's own message id
+   * (or a tool_use/tool_result id) — identical whether this message arrived
+   * over the live realtime transport or was re-read from the persisted
+   * transcript. Used by the frontend session store to dedup a message
+   * against its own persisted copy when the two paths assign different
+   * `id`s. Undefined when no stable provider id is available (e.g. user
+   * messages, older transcripts, other providers).
+   */
+  dedupeKey?: string;
   toolResult?: {
     content?: string;
     isError?: boolean;

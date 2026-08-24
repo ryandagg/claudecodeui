@@ -64,6 +64,15 @@ export interface NormalizedMessage {
   toolName?: string;
   toolInput?: unknown;
   toolId?: string;
+  /**
+   * Stable cross-path identity derived from the provider API's own message id
+   * (or a tool_use/tool_result id) — identical whether this message arrived
+   * over the live websocket or was re-read from the persisted transcript over
+   * REST. Used to dedup a message against its own persisted copy when the two
+   * paths assign different `id`s. Undefined when no stable provider id is
+   * available (e.g. user messages, older transcripts, other providers).
+   */
+  dedupeKey?: string;
   toolResult?: { content: string; isError: boolean; toolUseResult?: unknown } | null;
   isError?: boolean;
   text?: string;
@@ -311,7 +320,7 @@ function dedupeAdjacentAssistantEchoes(merged: NormalizedMessage[]): NormalizedM
  * JSONL indexing lags) stays in `realtimeMessages` so the chat pane never
  * flashes the empty "Continue your conversation" state.
  */
-function pruneRealtimeSupersededByServer(
+export function pruneRealtimeSupersededByServer(
   serverMessages: NormalizedMessage[],
   realtimeMessages: NormalizedMessage[],
 ): NormalizedMessage[] {
@@ -320,9 +329,21 @@ function pruneRealtimeSupersededByServer(
   }
 
   const serverIds = new Set(serverMessages.map((message) => message.id));
+  const serverDedupeKeys = new Set(
+    serverMessages.map((message) => message.dedupeKey).filter((key): key is string => Boolean(key)),
+  );
 
   return realtimeMessages.filter((message) => {
     if (serverIds.has(message.id)) {
+      return false;
+    }
+
+    // Same assistant/tool message can carry a different `id` on each path
+    // (live SDK event vs. persisted transcript re-read), but a stable
+    // dedupeKey derived from the provider's own message/tool id matches
+    // across both — this is the fix for duplicate bubbles that id-only
+    // dedup could not catch.
+    if (message.dedupeKey && serverDedupeKeys.has(message.dedupeKey)) {
       return false;
     }
 
@@ -358,29 +379,64 @@ function pruneRealtimeSupersededByServer(
   });
 }
 
-function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
+/**
+ * Filters realtime rows down to the ones that still need to be shown
+ * alongside `server`, dropping:
+ * (i) rows whose `id` the server copy already owns;
+ * (ii) rows whose `dedupeKey` matches a server row's `dedupeKey` — the same
+ *     assistant/tool message arrives with a different `id` on the live
+ *     websocket path than on the persisted REST path, so id alone cannot
+ *     catch this, but the stable provider-derived dedupeKey can;
+ * (iii) `local_*` optimistic user echoes matched by `hasServerEchoForLocalUser`;
+ * (iv) realtime-internal duplicates (replay/reconnect stacking before the
+ *     message is persisted), keyed by `(dedupeKey ?? id)`.
+ * Original realtime order is preserved.
+ */
+function dropSupersededRealtime(
+  realtime: NormalizedMessage[],
+  serverIds: Set<string>,
+  serverDedupeKeys: Set<string>,
+  server: NormalizedMessage[],
+): NormalizedMessage[] {
+  const seen = new Set<string>();
+  const out: NormalizedMessage[] = [];
+  for (const m of realtime) {
+    if (serverIds.has(m.id)) continue;
+    if (m.dedupeKey && serverDedupeKeys.has(m.dedupeKey)) continue;
+    if (m.id.startsWith('local_') && hasServerEchoForLocalUser(m, server)) continue;
+    const internalKey = m.dedupeKey ?? m.id;
+    if (seen.has(internalKey)) continue;
+    seen.add(internalKey);
+    out.push(m);
+  }
+  return out;
+}
+
+/**
+ * Compute merged messages: server + realtime, deduped by id, by dedupeKey
+ * (stable cross-path identity — the fix for a message that gets a different
+ * id on the live websocket path vs. the persisted REST path), and by adjacent
+ * assistant echo (same trimmed text), so finalized stream rows do not stack
+ * on top of the persisted copy before realtime is cleared.
+ */
+export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   if (realtime.length === 0) {
     return dedupeAdjacentAssistantEchoes(server);
   }
   if (server.length === 0) {
-    return dedupeAdjacentAssistantEchoes(realtime);
+    // No persisted copy to dedup against yet (streaming, pre-persistence),
+    // but realtime-internal duplicates (replay/reconnect) still need
+    // collapsing, so run the same filter with empty server-side sets.
+    return dedupeAdjacentAssistantEchoes(
+      dropSupersededRealtime(realtime, new Set(), new Set(), server),
+    );
   }
 
   const serverIds = new Set(server.map((message) => message.id));
-  const extra = realtime.filter((message) => {
-    if (serverIds.has(message.id)) {
-      return false;
-    }
-    // Optimistic user rows use `local_*` ids; once the same text exists on the
-    // server-backed copy from the same send window, drop the realtime echo to
-    // avoid duplicate bubbles without hiding repeated prompts from history.
-    if (message.id.startsWith('local_')) {
-      if (hasServerEchoForLocalUser(message, server)) {
-        return false;
-      }
-    }
-    return true;
-  });
+  const serverDedupeKeys = new Set(
+    server.map((message) => message.dedupeKey).filter((key): key is string => Boolean(key)),
+  );
+  const extra = dropSupersededRealtime(realtime, serverIds, serverDedupeKeys, server);
 
   if (extra.length === 0) {
     return dedupeAdjacentAssistantEchoes(server);

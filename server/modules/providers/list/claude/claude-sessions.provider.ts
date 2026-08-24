@@ -331,6 +331,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               isError: Boolean(part.is_error),
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult,
+              dedupeKey: part.tool_use_id ? `toolresult:${part.tool_use_id}` : undefined,
             }));
           } else if (part.type === 'text') {
             const text = part.text || '';
@@ -499,6 +500,15 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
     if (raw.message?.role === 'assistant' && raw.message?.content) {
       if (Array.isArray(raw.message.content)) {
+        // The API `message.id` (e.g. `msg_bdrk_...`) is identical across the
+        // live SDK stream event and the persisted transcript row for the
+        // same assistant turn, unlike `baseId` — which falls back to a random
+        // id when the transcript `uuid` is absent (the live-event case).
+        // Combined with the part index (or the tool_use block's own stable
+        // id), this gives a dedupeKey that matches across both data paths
+        // even though `id` never will, so the UI can collapse the duplicate
+        // instead of rendering it twice.
+        const apiMessageId = typeof raw.message?.id === 'string' ? raw.message.id : null;
         let partIndex = 0;
         for (const part of raw.message.content) {
           if (part.type === 'text' && part.text) {
@@ -510,6 +520,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               kind: 'text',
               role: 'assistant',
               content: part.text,
+              dedupeKey: apiMessageId ? `${apiMessageId}:${partIndex}` : undefined,
             }));
           } else if (part.type === 'tool_use') {
             messages.push(createNormalizedMessage({
@@ -521,6 +532,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolName: part.name,
               toolInput: part.input,
               toolId: part.id,
+              dedupeKey: part.id ? `tool:${part.id}` : (apiMessageId ? `${apiMessageId}:${partIndex}` : undefined),
             }));
           } else if (part.type === 'thinking' && (part.thinking || part.signature)) {
             messages.push(createNormalizedMessage({
@@ -530,6 +542,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'thinking',
               content: part.thinking || '_(thinking redacted)_',
+              dedupeKey: apiMessageId ? `${apiMessageId}:${partIndex}` : undefined,
             }));
           }
           partIndex++;
@@ -543,6 +556,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           kind: 'text',
           role: 'assistant',
           content: raw.message.content,
+          dedupeKey: (typeof raw.message?.id === 'string') ? `${raw.message.id}:0` : undefined,
         }));
       }
       return messages;

@@ -22,6 +22,7 @@ import {
     translateWindowsPathForPosix,
     validateWorkspacePath,
 } from '@/shared/utils.js';
+import { ensureModelContextLimits, peekModelContextLimit } from '@/modules/providers/list/claude/claude-model-limits.provider.js';
 import { closeSessionsWatcher, initializeSessionsWatcher } from '@/modules/providers/index.js';
 import { createWebSocketServer } from '@/modules/websocket/index.js';
 
@@ -1511,6 +1512,9 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
         let outputTokens = 0;
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
+        // Model of the latest assistant turn — the config the auto-compaction
+        // threshold below is resolved for.
+        let sessionModel = null;
 
         // Find the latest assistant message with usage data (scan from end)
         for (let i = lines.length - 1; i >= 0; i--) {
@@ -1527,6 +1531,7 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
                     cacheCreationTokens = readUsageNumber(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? usage.cacheCreationTokens);
                     inputTokens = directInputTokens + cacheReadTokens + cacheCreationTokens;
                     outputTokens = readUsageNumber(usage.output_tokens ?? usage.outputTokens);
+                    sessionModel = entry.message?.model ?? null;
 
                     break; // Stop after finding the latest assistant message
                 }
@@ -1539,6 +1544,16 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
         const totalUsed = inputTokens + outputTokens;
         const cacheTokens = cacheReadTokens + cacheCreationTokens;
 
+        // Context window for the "% of context window" button: the session
+        // model's real max_input_tokens from the gateway catalog (see
+        // claude-model-limits), a synchronous cache lookup. On a cache miss (the
+        // startup fetch hasn't landed, or the model isn't listed) we kick off a
+        // non-blocking fetch to warm it for next time and fall back to a raw count.
+        const contextLimit = peekModelContextLimit(sessionModel);
+        if (contextLimit === null) {
+            ensureModelContextLimits().catch(() => {});
+        }
+
         res.json({
             used: totalUsed,
             total: contextWindow,
@@ -1547,6 +1562,7 @@ app.get('/api/projects/:projectId/sessions/:sessionId/token-usage', authenticate
             cacheReadTokens,
             cacheCreationTokens,
             cacheTokens,
+            contextLimit,
             breakdown: {
                 input: inputTokens,
                 output: outputTokens
@@ -1874,6 +1890,11 @@ async function startServer() {
 
             // Start watching the projects folder for changes
             await initializeSessionsWatcher();
+
+            // Warm the per-model context-window cache from the gateway catalog so
+            // the token-usage button can show "% of context window" on first load.
+            // Non-blocking: a cold cache just falls back to a raw count until it lands.
+            ensureModelContextLimits().catch(() => {});
 
             // Start server-side plugin processes for enabled plugins
             startEnabledPluginServers().catch(err => {

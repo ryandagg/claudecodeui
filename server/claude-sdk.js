@@ -20,6 +20,8 @@ import os from 'os';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import { CLAUDE_FALLBACK_MODELS } from './modules/providers/list/claude/claude-models.provider.js';
+import { extractTokenBudget } from './modules/providers/list/claude/claude-token-budget.js';
+import { ensureModelContextLimits, peekModelContextLimit } from './modules/providers/list/claude/claude-model-limits.provider.js';
 import { providerModelsService } from './modules/providers/services/provider-models.service.js';
 import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
 import {
@@ -311,78 +313,6 @@ function transformMessage(sdkMessage) {
   return sdkMessage;
 }
 
-function readNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/**
- * Extracts token usage from SDK messages.
- * Prefers per-step `message.usage` (Claude message payload), then falls back
- * to result-level usage/modelUsage for compatibility across SDK versions.
- * @param {Object} sdkMessage - SDK stream message
- * @returns {Object|null} Token budget object or null
- */
-function extractTokenBudget(sdkMessage) {
-  if (!sdkMessage || typeof sdkMessage !== 'object') {
-    return null;
-  }
-
-  const messageUsage = sdkMessage.message?.usage || sdkMessage.usage;
-  if (messageUsage && typeof messageUsage === 'object') {
-    const directInputTokens = readNumber(messageUsage.input_tokens ?? messageUsage.inputTokens);
-    const cacheCreationTokens = readNumber(messageUsage.cache_creation_input_tokens ?? messageUsage.cacheCreationInputTokens ?? messageUsage.cacheCreationTokens);
-    const cacheReadTokens = readNumber(messageUsage.cache_read_input_tokens ?? messageUsage.cacheReadInputTokens ?? messageUsage.cacheReadTokens);
-    const cacheTokens = cacheCreationTokens + cacheReadTokens;
-    const inputTokens = directInputTokens + cacheTokens;
-    const outputTokens = readNumber(messageUsage.output_tokens ?? messageUsage.outputTokens);
-    const totalUsed = inputTokens + outputTokens;
-    const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
-
-    return {
-      used: totalUsed,
-      total: contextWindow,
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheCreationTokens,
-      cacheTokens,
-      breakdown: {
-        input: inputTokens,
-        output: outputTokens,
-      },
-    };
-  }
-
-  if (!sdkMessage.modelUsage || typeof sdkMessage.modelUsage !== 'object') {
-    return null;
-  }
-
-  // Fallback for older SDK messages with only modelUsage
-  const modelKey = Object.keys(sdkMessage.modelUsage)[0];
-  const modelData = sdkMessage.modelUsage[modelKey];
-
-  if (!modelData || typeof modelData !== 'object') {
-    return null;
-  }
-
-  const inputTokens = readNumber(modelData.cumulativeInputTokens ?? modelData.inputTokens);
-  const outputTokens = readNumber(modelData.cumulativeOutputTokens ?? modelData.outputTokens);
-  const totalUsed = inputTokens + outputTokens;
-  const contextWindow = parseInt(process.env.CONTEXT_WINDOW, 10) || 160000;
-
-  return {
-    used: totalUsed,
-    total: contextWindow,
-    inputTokens,
-    outputTokens,
-    breakdown: {
-      input: inputTokens,
-      output: outputTokens,
-    },
-  };
-}
-
 /**
  * Handles image processing for SDK queries
  * Saves base64 images to temporary files and returns modified prompt with file paths
@@ -555,6 +485,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
       sessionId,
       options.model,
     );
+
+    // Context window for the token-usage button's "% of context window": the
+    // model's real max_input_tokens from the gateway catalog (see
+    // claude-model-limits). A synchronous map lookup — available identically here
+    // and on the REST load path — so there's no idle query, re-emit, or flicker
+    // workaround. A cold cache (startup fetch pending, or model unlisted) yields
+    // null → raw count; kick off a background fetch to self-heal the next run.
+    const runModel = resolvedModel || options.model;
+    const contextLimit = peekModelContextLimit(runModel);
+    if (contextLimit === null) {
+      ensureModelContextLimits().catch(() => {});
+    }
 
     let effortModels = CLAUDE_FALLBACK_MODELS;
     try {
@@ -763,10 +705,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
         ws.send(msg);
       }
 
-      // Extract and send token budget updates from assistant/result usage payloads
+      // Extract and send token budget updates from assistant/result usage payloads.
+      // Stamp on the run's context window (resolved synchronously above) so the UI
+      // can render "% of context window" instead of a raw token count.
       const tokenBudgetData = extractTokenBudget(message);
       if (tokenBudgetData) {
-        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+        const budgetKey = capturedSessionId || sessionId || null;
+        const tokenBudget = { ...tokenBudgetData, contextLimit };
+        ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, sessionId: budgetKey, provider: 'claude' }));
       }
     }
 

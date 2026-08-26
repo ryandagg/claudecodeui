@@ -118,6 +118,39 @@ export async function readClaudeModel(): Promise<string | null> {
     : null;
 }
 
+/**
+ * Reads the top-level `apiKeyHelper` command from the user settings file.
+ *
+ * Claude Code runs this command to mint a short-lived model-gateway API key. The
+ * app reuses it to authenticate its own read-only call to the gateway's
+ * `/v1/models` catalog (for per-model context-window limits). `null` when the key
+ * is absent — e.g. a non-gateway setup that authenticates some other way.
+ */
+export async function readClaudeApiKeyHelper(): Promise<string | null> {
+  const settings = await readJsonConfig(userSettingsPath());
+  return typeof settings.apiKeyHelper === 'string' && settings.apiKeyHelper.trim()
+    ? settings.apiKeyHelper.trim()
+    : null;
+}
+
+/**
+ * Reads a single value from the `env` block of the user settings file.
+ *
+ * Claude Code applies settings.json `env` OVER the inherited shell env, so for a
+ * value the CLI resolves that way — e.g. `ANTHROPIC_BASE_URL` (the model gateway)
+ * or `NODE_EXTRA_CA_CERTS` (the gateway's TLS trust bundle) — the settings file is
+ * the source of truth. A server started from a plain shell may not have the value
+ * in its own `process.env` at all (the SDK injects it only into the CLI it spawns),
+ * so callers must consult this before falling back to `process.env`. `null` when
+ * the key is absent or blank.
+ */
+export async function readClaudeSettingsEnvValue(key: string): Promise<string | null> {
+  const settings = await readJsonConfig(userSettingsPath());
+  const env = readObjectRecord(settings.env) ?? {};
+  const value = env[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function dedupe(items: string[]): string[] {
   return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
 }

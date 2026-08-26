@@ -276,6 +276,9 @@ export function useChatSessionState({
   // viewport to the bottom while the user is reading older messages. This ref
   // is written synchronously in the scroll handler and read by that effect.
   const isUserScrolledUpRef = useRef(false);
+  // The context window is stamped on the token-budget stream from a synchronous
+  // per-model cache, identically on the live and REST paths, so no client-side
+  // stickiness is needed — a plain setter suffices.
   const [tokenBudget, setTokenBudget] = useState<Record<string, unknown> | null>(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState(INITIAL_VISIBLE_MESSAGES);
   const [searchWindow, setSearchWindow] = useState<{ start: number; end: number } | null>(null);

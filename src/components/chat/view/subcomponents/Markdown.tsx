@@ -8,6 +8,12 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTranslation } from 'react-i18next';
 
 import { normalizeInlineCodeFences } from '../../utils/chatFormatting';
+import {
+  inlineCodeLooksLikePath,
+  looksLikeFilePath,
+  looksLikeUrl,
+  stripLineSuffix,
+} from '../../utils/linkClassification';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
 import { MermaidDiagram } from '../../../markdown/MermaidDiagram';
@@ -16,38 +22,6 @@ import { isMermaidCodeNode } from '../../../markdown/mermaidConfig';
 type MarkdownProps = {
   children: React.ReactNode;
   className?: string;
-};
-
-// Links to the wider web (or in-page anchors) keep normal browser navigation;
-// everything else is treated as a workspace file reference.
-const isExternalHref = (href?: string): boolean =>
-  !!href && (/^(https?:|mailto:|tel:|data:)/i.test(href) || href.startsWith('#'));
-
-// Strip a trailing `:line` / `:line:col` suffix (e.g. `src/foo.ts:130`).
-const stripLineSuffix = (value: string): string => value.replace(/:\d+(?::\d+)?$/, '');
-
-// A usable file path contains a separator or a filename with an extension.
-const looksLikeFilePath = (value?: string): value is string => {
-  if (!value) {
-    return false;
-  }
-  const cleaned = stripLineSuffix(value.trim());
-  if (!cleaned || cleaned === '#') {
-    return false;
-  }
-  return /[\\/]/.test(cleaned) || /\.[a-z0-9]+$/i.test(cleaned);
-};
-
-// Inline code often IS a file path (`src/foo.ts`, `server/index.js:42`), but it
-// is just as often prose-y identifiers (`array.map`, `Math.random`, `--flag`).
-// Only linkify inline code that carries a path separator and no whitespace, so
-// dotted method calls and option flags stay plain text.
-const inlineCodeLooksLikePath = (value: string): boolean => {
-  const cleaned = stripLineSuffix(value.trim());
-  if (!cleaned || /\s/.test(cleaned)) {
-    return false;
-  }
-  return /[\\/]/.test(cleaned) && looksLikeFilePath(cleaned);
 };
 
 // Chooses editor target: ⌘ (mac) / Ctrl (win/linux) opens VS Code, plain click
@@ -271,7 +245,10 @@ export function Markdown({ children, className }: MarkdownProps) {
         const linkText = childrenToText(linkChildren);
         const fileRef = looksLikeFilePath(href) ? href : looksLikeFilePath(linkText) ? linkText : undefined;
 
-        if (fileRef && !isExternalHref(href)) {
+        // A file reference opens in the editor / VS Code — but only when the href
+        // is not itself a hyperlink. `[src/foo.ts](https://example.com)` must
+        // follow the URL, not open the path.
+        if (fileRef && !looksLikeUrl(href)) {
           return (
             <a
               href={href || fileRef}
@@ -287,9 +264,13 @@ export function Markdown({ children, className }: MarkdownProps) {
           );
         }
 
+        // Everything else is a hyperlink: open it in the browser. Fall back to
+        // the link text when the href is empty but the text is a URL, so a
+        // model-emitted `[https://example.com]()` still navigates correctly.
+        const browserHref = href || (looksLikeUrl(linkText) ? linkText : undefined);
         return (
           <a
-            href={href}
+            href={browserHref}
             className="text-blue-600 hover:underline dark:text-blue-400"
             target="_blank"
             rel="noopener noreferrer"

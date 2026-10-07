@@ -1,11 +1,15 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService, readFirstUserMessagePreview } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
-import { AppError } from '@/shared/utils.js';
+import { AppError, deriveRepoGrouping, getPathBasename, type RepoGrouping } from '@/shared/utils.js';
+
+const execFileAsync = promisify(execFile);
 
 type SessionSummary = {
   id: string;
@@ -33,6 +37,12 @@ export type ProjectListItem = {
   displayName: string;
   fullPath: string;
   isStarred: boolean;
+  // Owning repository of this project path, so the sidebar can group every
+  // worktree of a repo under one header. For a plain checkout `repoRoot` is the
+  // project itself; for a linked worktree it is the originating repo. Resolved
+  // from `git rev-parse --git-common-dir` (see resolveRepoGrouping).
+  repoRoot: string;
+  repoName: string;
   sessions: SessionSummary[];
   sessionMeta: {
     hasMore: boolean;
@@ -109,6 +119,42 @@ export async function generateDisplayName(projectName: string, actualProjectDir:
   }
 
   return projectPath;
+}
+
+// A project path's owning repo does not change over a process's lifetime, so
+// the git lookup is memoized to keep repeated sidebar loads from re-spawning
+// one `git` per project. Both hits and misses are cached: a non-git path is
+// stably its own group until the server restarts.
+const repoGroupingCache = new Map<string, RepoGrouping>();
+
+/**
+ * Resolves the owning repository of a project path for sidebar grouping.
+ *
+ * Uses `git rev-parse --git-common-dir` — the same primitive the git route uses
+ * to name a worktree's repo — so every linked worktree of a repo resolves to
+ * the same `repoRoot`. Non-git paths (or paths that no longer exist) fall back
+ * to being their own group, which keeps "always group" total: every project
+ * lands under exactly one header.
+ */
+async function resolveRepoGrouping(projectPath: string): Promise<RepoGrouping> {
+  const cached = repoGroupingCache.get(projectPath);
+  if (cached) {
+    return cached;
+  }
+
+  let grouping: RepoGrouping;
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: projectPath,
+      maxBuffer: 1024 * 1024,
+    });
+    grouping = deriveRepoGrouping(projectPath, stdout);
+  } catch {
+    grouping = { repoRoot: projectPath, repoName: getPathBasename(projectPath) || projectPath };
+  }
+
+  repoGroupingCache.set(projectPath, grouping);
+  return grouping;
 }
 
 function normalizeSessionPagination(options: SessionPaginationOptions = {}): { limit: number; offset: number } {
@@ -220,6 +266,10 @@ export async function getProjectsWithSessions(
   const projects: ProjectListItem[] = [];
   let processedProjects = 0;
 
+  // Resolve each project's owning repo in parallel up front so the sequential
+  // per-project loop below (which streams progress) only reads from cache.
+  await Promise.all(projectRows.map((row) => resolveRepoGrouping(row.project_path)));
+
   for (const row of projectRows) {
     processedProjects += 1;
 
@@ -243,12 +293,16 @@ export async function getProjectsWithSessions(
       offset: options.sessionsOffset,
     });
 
+    const { repoRoot, repoName } = await resolveRepoGrouping(projectPath);
+
     projects.push({
       projectId,
       path: projectPath,
       displayName,
       fullPath: projectPath,
       isStarred: Boolean(row.isStarred),
+      repoRoot,
+      repoName,
       sessions: sessionsPage.sessions,
       sessionMeta: {
         hasMore: sessionsPage.hasMore,
@@ -294,6 +348,7 @@ export async function getArchivedProjectsWithSessions(
         : await generateDisplayName(path.basename(row.project_path) || row.project_path, row.project_path);
 
     const sessionsPage = await readProjectSessionsIncludingArchived(row.project_path);
+    const { repoRoot, repoName } = await resolveRepoGrouping(row.project_path);
 
     archivedProjects.push({
       projectId: row.project_id,
@@ -301,6 +356,8 @@ export async function getArchivedProjectsWithSessions(
       displayName,
       fullPath: row.project_path,
       isStarred: Boolean(row.isStarred),
+      repoRoot,
+      repoName,
       isArchived: true,
       sessions: sessionsPage.sessions,
       sessionMeta: {

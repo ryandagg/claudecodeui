@@ -165,6 +165,57 @@ export const sortProjects = (
   return byName;
 };
 
+/** Last non-empty path segment, used as the fallback repo label. */
+const basenameFromPath = (inputPath: string): string => {
+  const segments = inputPath.split(/[\\/]+/).filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] || inputPath;
+};
+
+/**
+ * The repo this project groups under. Prefers the server-derived `repoRoot`
+ * (every worktree of a repo shares one), falling back to the project's own path
+ * so a payload without the field still groups each project as its own repo.
+ */
+export const getProjectRepoKey = (project: Project): string =>
+  project.repoRoot || project.fullPath || project.path || project.projectId;
+
+export type RepoGroup = {
+  repoRoot: string;
+  repoName: string;
+  projects: Project[];
+};
+
+/**
+ * Buckets an already sorted + filtered project list into per-repo groups.
+ *
+ * The incoming order is preserved for both groups (by first appearance) and the
+ * projects inside each — so the starred-first / name-or-date ordering that
+ * `sortProjects` applied upstream carries through without re-sorting here. Every
+ * project lands in exactly one group, so a standalone repo is simply a group of
+ * one: the Projects view always renders a repo header ("always group").
+ */
+export const groupProjectsByRepo = (projects: Project[]): RepoGroup[] => {
+  const groups = new Map<string, RepoGroup>();
+
+  for (const project of projects) {
+    const repoRoot = getProjectRepoKey(project);
+    const existingGroup = groups.get(repoRoot);
+
+    if (existingGroup) {
+      existingGroup.projects.push(project);
+      continue;
+    }
+
+    groups.set(repoRoot, {
+      repoRoot,
+      repoName: project.repoName || basenameFromPath(repoRoot),
+      projects: [project],
+    });
+  }
+
+  return [...groups.values()];
+};
+
 export const filterProjects = (projects: Project[], searchFilter: string): Project[] => {
   const normalizedSearch = searchFilter.trim().toLowerCase();
   if (!normalizedSearch) {

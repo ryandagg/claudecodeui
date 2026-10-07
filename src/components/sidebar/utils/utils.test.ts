@@ -11,8 +11,10 @@ import {
   filterProjects,
   getAllSessions,
   getProjectLastActivity,
+  getProjectRepoKey,
   getSessionName,
   getTaskIndicatorStatus,
+  groupProjectsByRepo,
   normalizeProjectForSettings,
   parseHiddenSessionPatterns,
   parseProjectSortOrder,
@@ -153,6 +155,43 @@ test('filterProjects matches on display name or path, case-insensitively', () =>
   assert.deepEqual(filterProjects(projects, 'front').map((p) => p.projectId), ['a']);
   assert.deepEqual(filterProjects(projects, '/repos/back').map((p) => p.projectId), ['b']);
   assert.equal(filterProjects(projects, '   ').length, 2); // blank → unfiltered
+});
+
+// ---------------------------------------------------------------------------
+// groupProjectsByRepo / getProjectRepoKey
+// ---------------------------------------------------------------------------
+test('getProjectRepoKey prefers repoRoot, then fullPath/path, then projectId', () => {
+  assert.equal(getProjectRepoKey(project({ repoRoot: '/repos/app', fullPath: '/repos/app/wt' })), '/repos/app');
+  assert.equal(getProjectRepoKey(project({ repoRoot: undefined, fullPath: '/repos/solo' })), '/repos/solo');
+  assert.equal(getProjectRepoKey(project({ repoRoot: undefined, fullPath: '', path: '/repos/p' })), '/repos/p');
+  assert.equal(getProjectRepoKey(project({ projectId: 'pid', repoRoot: undefined, fullPath: '', path: undefined })), 'pid');
+});
+
+test('groupProjectsByRepo buckets worktrees under their repoRoot and keeps a standalone as a group of one', () => {
+  const projects = [
+    project({ projectId: 'main', repoRoot: '/repos/app', repoName: 'app', fullPath: '/repos/app' }),
+    project({ projectId: 'solo', repoRoot: '/repos/solo', repoName: 'solo', fullPath: '/repos/solo' }),
+    project({ projectId: 'wt', repoRoot: '/repos/app', repoName: 'app', fullPath: '/repos/worktrees/wt' }),
+  ];
+
+  const groups = groupProjectsByRepo(projects);
+
+  // Group order follows first appearance; "app" leads because its first member
+  // appears before "solo", and the later worktree joins the existing group.
+  assert.deepEqual(groups.map((group) => group.repoRoot), ['/repos/app', '/repos/solo']);
+  assert.deepEqual(groups[0].projects.map((p) => p.projectId), ['main', 'wt']);
+  assert.deepEqual(groups[1].projects.map((p) => p.projectId), ['solo']);
+  assert.equal(groups[0].repoName, 'app');
+});
+
+test('groupProjectsByRepo falls back to the project path and its basename when repoRoot is absent', () => {
+  const groups = groupProjectsByRepo([
+    project({ projectId: 'a', repoRoot: undefined, repoName: undefined, fullPath: '/repos/legacy-app' }),
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].repoRoot, '/repos/legacy-app');
+  assert.equal(groups[0].repoName, 'legacy-app');
 });
 
 // ---------------------------------------------------------------------------

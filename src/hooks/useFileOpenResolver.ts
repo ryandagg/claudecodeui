@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
 
 import { api } from '../utils/api';
+import { normalizePathSeparators } from '../utils/filePaths';
 import type { Project } from '../types/app';
 
 type FileNode = {
@@ -19,7 +20,7 @@ type FlatFile = {
 // that expect a concrete diff payload type as well as generic callers.
 type OnFileOpen = (filePath: string, diffInfo?: any) => void;
 
-const normalize = (value: string): string => value.replace(/\\/g, '/');
+const normalize = normalizePathSeparators;
 
 const flatten = (nodes: FileNode[], out: FlatFile[]): void => {
   for (const node of nodes) {

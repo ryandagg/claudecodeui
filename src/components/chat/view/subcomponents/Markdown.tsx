@@ -12,8 +12,8 @@ import {
   inlineCodeLooksLikePath,
   looksLikeFilePath,
   looksLikeUrl,
-  stripLineSuffix,
 } from '../../utils/linkClassification';
+import { stripLineSuffix } from '../../../../utils/filePaths';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
 import { MermaidDiagram } from '../../../markdown/MermaidDiagram';

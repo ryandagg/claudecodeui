@@ -5,21 +5,7 @@ import {
   inlineCodeLooksLikePath,
   looksLikeFilePath,
   looksLikeUrl,
-  stripLineSuffix,
 } from './linkClassification';
-
-// ---------------------------------------------------------------------------
-// stripLineSuffix
-// ---------------------------------------------------------------------------
-test('stripLineSuffix removes :line and :line:col suffixes', () => {
-  assert.equal(stripLineSuffix('src/foo.ts:130'), 'src/foo.ts');
-  assert.equal(stripLineSuffix('src/foo.ts:130:12'), 'src/foo.ts');
-});
-
-test('stripLineSuffix leaves paths without a numeric suffix untouched', () => {
-  assert.equal(stripLineSuffix('src/foo.ts'), 'src/foo.ts');
-  assert.equal(stripLineSuffix('README.md'), 'README.md');
-});
 
 // ---------------------------------------------------------------------------
 // looksLikeUrl — hyperlinks that must open in the browser, never VS Code
@@ -54,6 +40,15 @@ test('looksLikeUrl does NOT treat file paths as URLs', () => {
   assert.equal(looksLikeUrl('foo.ts'), false);
   assert.equal(looksLikeUrl(undefined), false);
   assert.equal(looksLikeUrl(''), false);
+});
+
+test('looksLikeUrl requires a scheme at the start, not buried mid-string', () => {
+  // The reference must *be* a link, not merely contain one — otherwise prose
+  // link text would be misrouted to the browser as an href.
+  assert.equal(looksLikeUrl('see https://example.com for details'), false);
+  // A word that merely ends in a registered scheme (`metadata:` contains
+  // `data:`) must not be mistaken for one.
+  assert.equal(looksLikeUrl('metadata:value'), false);
 });
 
 // ---------------------------------------------------------------------------

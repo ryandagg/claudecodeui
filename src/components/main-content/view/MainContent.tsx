@@ -10,6 +10,7 @@ import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useFileOpenResolver } from '../../../hooks/useFileOpenResolver';
 import { api } from '../../../utils/api';
+import { splitLineSuffix } from '../../../utils/filePaths';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 
@@ -122,9 +123,7 @@ function MainContent({
     // bare/partial refs resolve against the file tree so `vscode://file/...`
     // always gets an absolute path.
     openFileInVSCode: (filePath: string) => {
-      const match = filePath.match(/:(\d+)(?::\d+)?$/);
-      const line = match ? Number(match[1]) : undefined;
-      const bareRef = match ? filePath.slice(0, match.index) : filePath;
+      const { path: bareRef, line } = splitLineSuffix(filePath);
       if (bareRef === '~' || bareRef.startsWith('~/')) {
         void loadHomedir().then((home) => {
           if (!home) return;

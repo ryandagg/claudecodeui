@@ -5,27 +5,46 @@
 // this wrong is what made URLs like `https://example.com` try to open in VS Code
 // — a URL's `//` reads as a path separator unless it is excluded first.
 
-// Strip a trailing `:line` / `:line:col` suffix (e.g. `src/foo.ts:130`).
-export const stripLineSuffix = (value: string): string => value.replace(/:\d+(?::\d+)?$/, '');
+import { LinkifyIt } from 'linkify-it';
+
+import { stripLineSuffix } from '../../../utils/filePaths';
+
+// URL detection is delegated to linkify-it (the link engine behind markdown-it)
+// rather than hand-rolled regexes. Its "fuzzy" bare-domain and bare-email
+// heuristics are turned off on purpose: with them on, a source file whose
+// extension happens to be a country-code TLD (`foo.ts`, `index.rs`, `main.sh`)
+// would be mistaken for a link. Two schemes linkify-it does not ship by default
+// — `tel:` and `data:` — are registered so those URIs are still recognised.
+const linkify = new LinkifyIt({ fuzzyLink: false, fuzzyEmail: false, fuzzyIP: false });
+linkify.add('tel:', {
+  validate: (text, pos) => {
+    const match = /^[+()\-.\s0-9]{3,}/.exec(text.slice(pos));
+    return match ? match[0].length : 0;
+  },
+});
+linkify.add('data:', {
+  validate: (text, pos) => text.slice(pos).length,
+});
 
 // A hyperlink to the wider web (or an in-page `#anchor`) keeps normal browser
-// navigation and must never be mistaken for a workspace file path. The reliable
-// signals are a URL scheme with an authority (`https://`, `ftp://`, …), the
-// slash-less schemes (`mailto:` / `tel:` / `data:`), a bare `www.` host, or a
-// `#` fragment. Matching `scheme://` rather than a bare `scheme:` is deliberate:
-// a Windows path like `C:\Users\me` also begins with `letter:` and must stay a
-// file path.
+// navigation and must never be mistaken for a workspace file path. linkify-it
+// recognises scheme URLs (`https://…`, `mailto:…`, `tel:…`, …) anchored at the
+// start of the string; on top of that we treat a bare `www.` host and a `#`
+// fragment as browser links too, matching how GitHub-flavoured markdown and the
+// browser themselves resolve them. Anchoring at the start keeps a Windows path
+// like `C:\Users\me` — whose `C:` is not a real scheme — a file path.
 export const looksLikeUrl = (value?: string): boolean => {
   if (!value) {
     return false;
   }
   const cleaned = value.trim();
-  return (
-    /^[a-z][a-z0-9+.-]*:\/\//i.test(cleaned) ||
-    /^(mailto:|tel:|data:)/i.test(cleaned) ||
-    /^www\./i.test(cleaned) ||
-    cleaned.startsWith('#')
-  );
+  if (!cleaned) {
+    return false;
+  }
+  if (cleaned.startsWith('#') || /^www\./i.test(cleaned)) {
+    return true;
+  }
+  return linkify.matchAtStart(cleaned) !== null;
 };
 
 // A usable file path contains a separator or a filename with an extension — but

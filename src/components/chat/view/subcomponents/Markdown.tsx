@@ -14,8 +14,10 @@ import {
   looksLikeUrl,
 } from '../../utils/linkClassification';
 import { stripLineSuffix } from '../../../../utils/filePaths';
+import { isOpenableFileRef } from '../../../../utils/fileRefMatch';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 import { usePaletteOps } from '../../../../contexts/PaletteOpsContext';
+import { useProjectFiles } from '../../../../contexts/ProjectFilesContext';
 import { MermaidDiagram } from '../../../markdown/MermaidDiagram';
 import { isMermaidCodeNode } from '../../../markdown/mermaidConfig';
 
@@ -54,9 +56,13 @@ type CodeBlockProps = {
   // Present only when rendered inside Markdown (not the raw component map), so
   // path-like inline code can open in the editor / VS Code on click.
   onOpenFileRef?: (fileRef: string, viaVSCode: boolean) => void;
+  // Confirms a path-shaped token is actually an openable file (real project
+  // file or an absolute path) before it is rendered as a clickable link, so
+  // `org/repo#pr` refs and branch names stay plain text.
+  canOpenFileRef?: (raw: string) => boolean;
 };
 
-const CodeBlock = ({ node, inline, className, children, onOpenFileRef, ...props }: CodeBlockProps) => {
+const CodeBlock = ({ node, inline, className, children, onOpenFileRef, canOpenFileRef, ...props }: CodeBlockProps) => {
   const { t } = useTranslation('chat');
   const [copied, setCopied] = useState(false);
   const raw = Array.isArray(children) ? children.join('') : String(children ?? '');
@@ -67,8 +73,9 @@ const CodeBlock = ({ node, inline, className, children, onOpenFileRef, ...props 
   if (shouldInline) {
     // Path-like inline code (`src/foo.ts:42`) becomes a link: plain click opens
     // the in-app editor, ⌘/Ctrl-click opens VS Code. Everything else — dotted
-    // identifiers, flags, prose — stays as plain inline code.
-    if (onOpenFileRef && inlineCodeLooksLikePath(raw)) {
+    // identifiers, flags, prose, and path-shaped tokens that aren't real files
+    // (`heroku/api#18258`, `jab/core-compute-hacks`) — stays as plain inline code.
+    if (onOpenFileRef && inlineCodeLooksLikePath(raw) && canOpenFileRef?.(raw.trim())) {
       const fileRef = raw.trim();
       return (
         <code
@@ -220,6 +227,15 @@ export function Markdown({ children, className }: MarkdownProps) {
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
   const { openFileInEditor, openFileInVSCode } = usePaletteOps();
+  const { resolveFileRef } = useProjectFiles();
+
+  // A path-shaped token only links when it resolves to a real project file (or
+  // is an absolute path); otherwise it renders as plain text, so references like
+  // `heroku/api#18258` no longer open a dead file viewer.
+  const canOpenFileRef = useCallback(
+    (ref: string) => isOpenableFileRef(ref, resolveFileRef),
+    [resolveFileRef],
+  );
 
   // ⌘/Ctrl-click opens VS Code; plain click keeps the in-app editor. The line
   // suffix is stripped for the in-app editor but kept for VS Code so it jumps
@@ -238,17 +254,21 @@ export function Markdown({ children, className }: MarkdownProps) {
   const components = useMemo(
     () => ({
       ...markdownComponents,
-      code: (codeProps: CodeBlockProps) => <CodeBlock {...codeProps} onOpenFileRef={openFileRef} />,
+      code: (codeProps: CodeBlockProps) => (
+        <CodeBlock {...codeProps} onOpenFileRef={openFileRef} canOpenFileRef={canOpenFileRef} />
+      ),
       a: ({ href, children: linkChildren }: { href?: string; children?: React.ReactNode }) => {
         // Prefer the href when it is a real path; otherwise fall back to the
         // link text, since models often emit `[src/foo.ts]()` with an empty href.
         const linkText = childrenToText(linkChildren);
-        const fileRef = looksLikeFilePath(href) ? href : looksLikeFilePath(linkText) ? linkText : undefined;
+        const candidate = looksLikeFilePath(href) ? href : looksLikeFilePath(linkText) ? linkText : undefined;
 
         // A file reference opens in the editor / VS Code — but only when the href
-        // is not itself a hyperlink. `[src/foo.ts](https://example.com)` must
-        // follow the URL, not open the path.
-        if (fileRef && !looksLikeUrl(href)) {
+        // is not itself a hyperlink (`[src/foo.ts](https://example.com)` must
+        // follow the URL) and the candidate is an actual project file, so a
+        // path-shaped non-file does not open a dead file viewer.
+        const fileRef = candidate && !looksLikeUrl(href) && canOpenFileRef(candidate) ? candidate : undefined;
+        if (fileRef) {
           return (
             <a
               href={href || fileRef}
@@ -264,10 +284,15 @@ export function Markdown({ children, className }: MarkdownProps) {
           );
         }
 
-        // Everything else is a hyperlink: open it in the browser. Fall back to
-        // the link text when the href is empty but the text is a URL, so a
-        // model-emitted `[https://example.com]()` still navigates correctly.
+        // A real hyperlink opens in the browser. Fall back to the link text when
+        // the href is empty but the text is a URL, so a model-emitted
+        // `[https://example.com]()` still navigates correctly.
         const browserHref = href || (looksLikeUrl(linkText) ? linkText : undefined);
+        if (!browserHref) {
+          // Neither a known file nor a URL — render as plain text rather than a
+          // dead link that resolves to nothing.
+          return <>{linkChildren}</>;
+        }
         return (
           <a
             href={browserHref}
@@ -280,7 +305,7 @@ export function Markdown({ children, className }: MarkdownProps) {
         );
       },
     }),
-    [openFileRef],
+    [openFileRef, canOpenFileRef],
   );
 
   return (

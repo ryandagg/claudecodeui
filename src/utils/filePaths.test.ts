@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizePathSeparators, splitLineSuffix, stripLineSuffix } from './filePaths';
+import {
+  isAbsoluteFileRef,
+  normalizePathSeparators,
+  splitLineSuffix,
+  stripLineSuffix,
+} from './filePaths';
 
 // ---------------------------------------------------------------------------
 // splitLineSuffix
@@ -47,4 +52,22 @@ test('stripLineSuffix leaves paths without a numeric suffix untouched', () => {
 test('normalizePathSeparators converts backslashes to forward slashes', () => {
   assert.equal(normalizePathSeparators('C:\\Users\\me\\file.ts'), 'C:/Users/me/file.ts');
   assert.equal(normalizePathSeparators('src/foo.ts'), 'src/foo.ts');
+});
+
+// ---------------------------------------------------------------------------
+// isAbsoluteFileRef
+// ---------------------------------------------------------------------------
+test('isAbsoluteFileRef recognizes POSIX, home, and Windows-drive references', () => {
+  assert.equal(isAbsoluteFileRef('/Users/me/file.ts'), true);
+  assert.equal(isAbsoluteFileRef('~'), true);
+  assert.equal(isAbsoluteFileRef('~/notes.md'), true);
+  assert.equal(isAbsoluteFileRef('C:\\Users\\me\\file.ts'), true);
+  assert.equal(isAbsoluteFileRef('C:/Users/me/file.ts'), true);
+});
+
+test('isAbsoluteFileRef rejects relative paths and non-file slugs', () => {
+  assert.equal(isAbsoluteFileRef('src/foo.ts'), false);
+  assert.equal(isAbsoluteFileRef('heroku/api#18258'), false);
+  assert.equal(isAbsoluteFileRef('jab/core-compute-hacks'), false);
+  assert.equal(isAbsoluteFileRef('~nothome'), false);
 });

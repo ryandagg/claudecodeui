@@ -36,3 +36,17 @@ export const stripLineSuffix = (value: string): string => splitLineSuffix(value)
 // Normalize Windows-style backslash separators to forward slashes so a single
 // matching strategy works regardless of which OS produced the path.
 export const normalizePathSeparators = (value: string): string => value.replace(/\\/g, '/');
+
+// A filesystem-absolute reference: POSIX `/…`, home `~` / `~/…`, or a Windows
+// drive like `C:\…` / `C:/…`. These name a concrete location and open as-is, so
+// callers can treat them as real file references without consulting the
+// project's (relative) file tree.
+export const isAbsoluteFileRef = (value: string): boolean => {
+  const cleaned = value.trim();
+  return (
+    cleaned.startsWith('/') ||
+    cleaned === '~' ||
+    cleaned.startsWith('~/') ||
+    /^[A-Za-z]:[\\/]/.test(cleaned)
+  );
+};

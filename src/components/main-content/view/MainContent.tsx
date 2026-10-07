@@ -7,6 +7,7 @@ import GitPanel from '../../git-panel/view/GitPanel';
 import PluginTabContent from '../../plugins/view/PluginTabContent';
 import type { MainContentProps } from '../types/types';
 import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
+import { ProjectFilesProvider } from '../../../contexts/ProjectFilesContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useFileOpenResolver } from '../../../hooks/useFileOpenResolver';
 import { api } from '../../../utils/api';
@@ -147,6 +148,7 @@ function MainContent({
   }
 
   return (
+    <ProjectFilesProvider projectId={selectedProject.projectId}>
     <div className="flex h-full flex-col">
       <MainContentHeader
         activeTab={activeTab}
@@ -238,6 +240,7 @@ function MainContent({
         />
       </div>
     </div>
+    </ProjectFilesProvider>
   );
 }
 

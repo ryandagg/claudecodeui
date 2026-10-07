@@ -69,6 +69,11 @@ export interface Project {
   fullPath: string;
   path?: string;
   isStarred?: boolean;
+  // Owning repository, used to group every worktree of a repo under one sidebar
+  // header. Optional so the UI stays resilient to an older server payload; the
+  // grouping util falls back to the project path when these are absent.
+  repoRoot?: string;
+  repoName?: string;
   sessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;

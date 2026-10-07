@@ -43,6 +43,8 @@ function Sidebar({
   const {
     isSidebarCollapsed,
     expandedProjects,
+    collapsedRepoGroups,
+    toggleRepoGroup,
     editingProject,
     showNewProject,
     editingName,
@@ -141,6 +143,8 @@ function Sidebar({
     isLoading,
     loadingProgress,
     expandedProjects,
+    collapsedRepoGroups,
+    onToggleRepoGroup: toggleRepoGroup,
     editingProject,
     editingName,
     initialSessionsLoaded,

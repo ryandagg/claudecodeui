@@ -20,6 +20,7 @@ import {
   compilePatterns,
   filterProjects,
   getAllSessions,
+  getProjectRepoKey,
   getSessionDate,
   HIDDEN_SESSION_STORAGE_KEY,
   parseHiddenSessionPatterns,
@@ -148,6 +149,9 @@ export function useSidebarController({
   const paletteOps = usePaletteOps();
   const { getSetting, settings } = useSettings();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  // Repo groups the user has collapsed in the Projects view. Presence = collapsed,
+  // so every group defaults to expanded. In-memory, matching `expandedProjects`.
+  const [collapsedRepoGroups, setCollapsedRepoGroups] = useState<Set<string>>(new Set());
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [editingName, setEditingName] = useState('');
@@ -220,6 +224,26 @@ export function useSidebarController({
       return next;
     });
   }, [selectedProject?.projectId]);
+
+  // Keep the selected project's repo group open so navigating to it (e.g. from
+  // search) can never leave it hidden behind a group the user had collapsed.
+  // Keyed by the repo key — a primitive that is stable across list refreshes —
+  // so a manual collapse of an *unselected* group is never reopened.
+  const selectedRepoKey = selectedProject ? getProjectRepoKey(selectedProject) : null;
+  useEffect(() => {
+    if (!selectedRepoKey) {
+      return;
+    }
+
+    setCollapsedRepoGroups((prev) => {
+      if (!prev.has(selectedRepoKey)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(selectedRepoKey);
+      return next;
+    });
+  }, [selectedRepoKey]);
 
   useEffect(() => {
     if (projects.length > 0 && !isLoading) {
@@ -447,6 +471,20 @@ export function useSidebarController({
       const next = new Set<string>();
       if (!prev.has(projectId)) {
         next.add(projectId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Repo-group collapse is an independent toggle per group (not accordion),
+  // so collapsing one repo never disturbs the others.
+  const toggleRepoGroup = useCallback((repoRoot: string) => {
+    setCollapsedRepoGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(repoRoot)) {
+        next.delete(repoRoot);
+      } else {
+        next.add(repoRoot);
       }
       return next;
     });
@@ -1078,6 +1116,8 @@ export function useSidebarController({
   return {
     isSidebarCollapsed,
     expandedProjects,
+    collapsedRepoGroups,
+    toggleRepoGroup,
     editingProject,
     showNewProject,
     editingName,

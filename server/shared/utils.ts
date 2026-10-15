@@ -306,6 +306,29 @@ export function getPathBasename(inputPath: string): string {
   return segments[segments.length - 1] ?? '';
 }
 
+/** The owning repository of a project path: an absolute root plus its basename. */
+export type RepoGrouping = {
+  repoRoot: string;
+  repoName: string;
+};
+
+/**
+ * Derives the owning-repository grouping key for a project path from the output
+ * of `git rev-parse --git-common-dir`.
+ *
+ * For a linked git worktree `--git-common-dir` points at the MAIN repo's shared
+ * `.git` (e.g. `/repos/app/.git`), so every worktree of a repo resolves to the
+ * same `repoRoot` — the key the sidebar groups projects under. A plain checkout
+ * returns its own `.git` (often the relative string `.git`), which resolves to
+ * the checkout root. The stdout can be relative, so it is resolved against
+ * `projectPath` before taking the parent directory's basename.
+ */
+export function deriveRepoGrouping(projectPath: string, gitCommonDirStdout: string): RepoGrouping {
+  const commonDir = path.resolve(projectPath, gitCommonDirStdout.trim());
+  const repoRoot = path.dirname(commonDir);
+  return { repoRoot, repoName: getPathBasename(repoRoot) || repoRoot };
+}
+
 /**
  * Canonicalizes project/workspace paths for stable DB keys and comparisons.
  *

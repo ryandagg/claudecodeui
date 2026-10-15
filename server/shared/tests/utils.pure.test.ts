@@ -10,6 +10,7 @@ import {
   createApiSuccessResponse,
   createCompleteMessage,
   createNormalizedMessage,
+  deriveRepoGrouping,
   generateMessageId,
   getPathBasename,
   normalizeProjectPath,
@@ -483,4 +484,36 @@ test('readProviderSkillMarkdownDefinitionFromContent uses the fallback name and 
     name: 'dir-name',
     description: '',
   });
+});
+
+// ---------------------------------------------------------------------------
+// deriveRepoGrouping
+// ---------------------------------------------------------------------------
+test('deriveRepoGrouping resolves a worktree to its owning repo root', () => {
+  // `--git-common-dir` from inside a linked worktree points at the main repo's
+  // shared .git, so the worktree groups under the originating repo, not itself.
+  assert.deepEqual(
+    deriveRepoGrouping('/repos/app/../worktrees/feature-x', '/repos/app/.git\n'),
+    { repoRoot: '/repos/app', repoName: 'app' },
+  );
+});
+
+test('deriveRepoGrouping resolves a plain checkout from a relative .git', () => {
+  // A normal repo returns the relative string ".git"; it must resolve against
+  // the project path so the root is the checkout itself.
+  assert.deepEqual(
+    deriveRepoGrouping('/repos/app', '.git'),
+    { repoRoot: '/repos/app', repoName: 'app' },
+  );
+  assert.deepEqual(
+    deriveRepoGrouping('/repos/app', './.git\n'),
+    { repoRoot: '/repos/app', repoName: 'app' },
+  );
+});
+
+test('deriveRepoGrouping groups sibling worktrees of one repo under the same key', () => {
+  const a = deriveRepoGrouping('/repos/worktrees/wt-a', '/repos/app/.git');
+  const b = deriveRepoGrouping('/repos/worktrees/wt-b', '/repos/app/.git');
+  assert.equal(a.repoRoot, b.repoRoot);
+  assert.equal(a.repoRoot, '/repos/app');
 });

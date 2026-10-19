@@ -10,6 +10,33 @@ import { sessionsDb } from '@/modules/database/index.js';
 
 const PROVIDER = 'claude';
 
+/**
+ * Claude Code transcripts interleave real conversation turns with bookkeeping
+ * entries (request plumbing, queue markers, cost/mode state, resume metadata).
+ * These are NOT conversation messages and must never be rendered.
+ *
+ * `api-request-blob` is the dangerous one: it embeds the raw request payload
+ * sent to the model as `message.role: 'user'` with multi-part content, so the
+ * normalizer would otherwise parse it as a ghost user bubble — one with no
+ * `uuid` and no `timestamp`, so it gets a freshly generated id and a
+ * `new Date()` timestamp on every read. That ghost duplicates the real prompt,
+ * sorts to the top server-side (`timestamp || 0` → epoch), and flips to the
+ * bottom once the client re-sorts during an active run. Skipping these at read
+ * time also keeps `total`/pagination counting real turns only.
+ */
+const NON_CONVERSATION_ENTRY_TYPES = new Set<string>([
+  'api-request',
+  'api-request-blob',
+  'api-request-shape',
+  'queue-operation',
+  'atis-latch',
+  'last-prompt',
+  'ai-title',
+  'cost-state',
+  'mode',
+  'attachment',
+]);
+
 type ClaudeToolResult = {
   content: unknown;
   isError: boolean;
@@ -136,9 +163,16 @@ async function getSessionMessages(
 
       try {
         const entry = JSON.parse(line) as AnyRecord;
-        if (entry.sessionId === providerSessionId) {
-          messages.push(entry);
+        if (entry.sessionId !== providerSessionId) {
+          continue;
         }
+        // Drop transcript bookkeeping entries so they never become ghost
+        // bubbles and never inflate `total`/pagination. See
+        // NON_CONVERSATION_ENTRY_TYPES.
+        if (typeof entry.type === 'string' && NON_CONVERSATION_ENTRY_TYPES.has(entry.type)) {
+          continue;
+        }
+        messages.push(entry);
       } catch {
         // Skip malformed JSONL lines that can happen during concurrent writes.
       }
@@ -301,6 +335,14 @@ export class ClaudeSessionsProvider implements IProviderSessions {
   normalizeMessage(rawMessage: unknown, sessionId: string | null): NormalizedMessage[] {
     const raw = readObjectRecord(rawMessage);
     if (!raw) {
+      return [];
+    }
+
+    // Bookkeeping entries are never conversation turns. Guard here too (not just
+    // at read time) because this is the shared chokepoint for REST and live
+    // paths — notably `api-request-blob`, which embeds a `message.role: 'user'`
+    // request payload and would otherwise normalize into a ghost user bubble.
+    if (typeof raw.type === 'string' && NON_CONVERSATION_ENTRY_TYPES.has(raw.type)) {
       return [];
     }
 

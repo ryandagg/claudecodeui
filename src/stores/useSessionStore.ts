@@ -176,12 +176,16 @@ function hasServerEchoForLocalUser(
 }
 
 function compareMessagesChronologically(a: NormalizedMessage, b: NormalizedMessage): number {
-  const timeA = readMessageTime(a) ?? 0;
-  const timeB = readMessageTime(b) ?? 0;
-  if (timeA !== timeB) {
-    return timeA - timeB;
+  // Rows with an unreadable timestamp sort LAST (treated as newest), never to the
+  // epoch/top: `?? 0` used to fling them above every real row, where the render
+  // window's front-truncation then hid them — the chat appeared to jump to an
+  // earlier message with the newest ones missing.
+  const timeA = readMessageTime(a) ?? Number.POSITIVE_INFINITY;
+  const timeB = readMessageTime(b) ?? Number.POSITIVE_INFINITY;
+  if (timeA === timeB) {
+    return 0;
   }
-  return 0;
+  return timeA - timeB;
 }
 
 /**
@@ -695,15 +699,21 @@ export function useSessionStore() {
   const updateStreaming = useCallback((sessionId: string, accumulatedText: string, msgProvider: LLMProvider) => {
     const slot = getSlot(sessionId);
     const streamId = `__streaming_${sessionId}`;
+    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
+    const existing = idx >= 0 ? slot.realtimeMessages[idx] : null;
     const msg: NormalizedMessage = {
       id: streamId,
       sessionId,
-      timestamp: new Date().toISOString(),
+      // Freeze the timestamp at the first delta (≈ when this turn began) instead
+      // of bumping to `now` each delta. A long-running stream would otherwise
+      // drift past the send-time of any prompt sent/queued while it runs, and the
+      // chronological merge would misorder the in-progress response *after* that
+      // later prompt (correct once idle, since idle skips the sort).
+      timestamp: existing?.timestamp ?? new Date().toISOString(),
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,
     };
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
     if (idx >= 0) {
       slot.realtimeMessages = [...slot.realtimeMessages];
       slot.realtimeMessages[idx] = msg;

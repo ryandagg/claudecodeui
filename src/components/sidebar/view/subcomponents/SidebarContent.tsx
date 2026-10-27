@@ -48,6 +48,7 @@ type ConversationSessionResult = {
   sessionId: string;
   sessionSummary: string;
   provider?: string;
+  isArchived?: boolean;
   matches: {
     role: string;
     snippet: string;
@@ -61,7 +62,7 @@ type ConversationSessionResult = {
 };
 
 
-function CollapsibleSessionResult({ session, onNavigate, onMatchClick }: { session: ConversationSessionResult; onNavigate: () => void; onMatchClick: (matchIndex: number) => void }) {
+function CollapsibleSessionResult({ session, onNavigate, onMatchClick, onRestore, t }: { session: ConversationSessionResult; onNavigate: () => void; onMatchClick: (matchIndex: number) => void; onRestore: () => void; t: TFunction }) {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -93,6 +94,25 @@ function CollapsibleSessionResult({ session, onNavigate, onMatchClick }: { sessi
             </span>
           )}
         </button>
+        {session.isArchived && (
+          <>
+            <span className="flex-shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+              {t('archived.badge', 'Archived')}
+            </span>
+            <button
+              type="button"
+              className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRestore();
+              }}
+              title={t('archived.restore', 'Restore session')}
+              aria-label={t('archived.restore', 'Restore session')}
+            >
+              <RotateCcw className="h-3 w-3" />
+            </button>
+          </>
+        )}
       </div>
       {expanded && (
         <div className="mt-1 space-y-1 pl-5">
@@ -359,6 +379,7 @@ export default function SidebarContent({
                       messageSnippet: session.matches[matchIndex]?.snippet,
                       messageUuid: session.matches[matchIndex]?.messageUuid,
                       query: conversationResults.query,
+                      isArchived: session.isArchived,
                     });
 
                     return (
@@ -367,6 +388,8 @@ export default function SidebarContent({
                         session={session}
                         onNavigate={() => onConversationResultClick(toTarget(0))}
                         onMatchClick={(matchIndex) => onConversationResultClick(toTarget(matchIndex))}
+                        onRestore={() => onRestoreArchivedSession(session.sessionId)}
+                        t={t}
                       />
                     );
                   })}

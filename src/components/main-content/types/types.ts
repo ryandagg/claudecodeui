@@ -55,6 +55,8 @@ export type MainContentProps = {
   onNavigateToSession: (targetSessionId: string, options?: SessionNavigationOptions) => void;
   onSessionEstablished: (sessionId: string, context: SessionEstablishedContext) => void;
   onShowSettings: (tab?: SettingsMainTab) => void;
+  /** Restores the open archived session; resolves false on failure. */
+  onRestoreSession: (sessionId: string) => Promise<boolean>;
   externalMessageUpdate: number;
   newSessionTrigger: number;
 };
@@ -68,6 +70,8 @@ export type MainContentHeaderProps = {
   shouldShowBrowserTab: boolean;
   isMobile: boolean;
   onMenuClick: () => void;
+  /** Restores the open archived session; resolves false on failure. */
+  onRestoreSession: (sessionId: string) => Promise<boolean>;
 };
 
 export type MainContentStateViewProps = {

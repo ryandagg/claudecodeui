@@ -102,54 +102,23 @@ function toSummaryText(customName: string | null, fallback: string | null | unde
  */
 type SearchableSessionRow = SessionRepositoryRow & { provider: SearchableProvider };
 
-function buildVisibleSessionsByPath(): Map<string, SearchableSessionRow> {
-  const rows = sessionsDb.getAllSessionsIncludingArchived();
-  const byPath = new Map<string, SearchableSessionRow>();
-  const projectArchiveStateByPath = new Map<string, boolean>();
-
-  for (const row of rows) {
-    const provider = row.provider as SearchableProvider;
-    if (!SUPPORTED_PROVIDERS.has(provider)) {
-      continue;
-    }
-
-    const rawJsonlPath = typeof row.jsonl_path === 'string' ? row.jsonl_path.trim() : '';
-    if (!rawJsonlPath) {
-      continue;
-    }
-
-    const normalizedProjectPath = typeof row.project_path === 'string' ? row.project_path.trim() : '';
-    if (normalizedProjectPath) {
-      if (!projectArchiveStateByPath.has(normalizedProjectPath)) {
-        const projectRow = projectsDb.getProjectPath(normalizedProjectPath);
-        projectArchiveStateByPath.set(normalizedProjectPath, Boolean(projectRow?.isArchived));
-      }
-      if (projectArchiveStateByPath.get(normalizedProjectPath) === true) {
-        continue;
-      }
-    }
-
-    byPath.set(normalizeIndexPath(rawJsonlPath), { ...row, provider });
-  }
-
-  return byPath;
-}
+type ClassifiedSession = {
+  /** Normalized (resolved) transcript path — the key the FTS index is matched on. */
+  path: string;
+  row: SearchableSessionRow;
+  isProjectArchived: boolean;
+};
 
 /**
- * Transcript-path → sessionId for every *archived* session, so the archive
- * view can search message bodies and not just titles/paths.
- *
- * This is the mirror image of {@link buildVisibleSessionsByPath}: it keeps the
- * items that one drops. An item counts as archived when the session row itself
- * is archived, or when its whole project is archived — both are surfaced in the
- * sidebar's archive view and so must be reachable by content there.
+ * Single scan over every indexed session: validates provider + transcript path
+ * and resolves each project's archive state once (cached). The two path→session
+ * maps below are just different keep/drop predicates over this one pass, so a
+ * fix to the validation or path normalization can't drift between them.
  */
-function buildArchivedSessionIdsByPath(): Map<string, string> {
-  const rows = sessionsDb.getAllSessionsIncludingArchived();
-  const byPath = new Map<string, string>();
+function* iterateIndexedSessions(): Generator<ClassifiedSession> {
   const projectArchiveStateByPath = new Map<string, boolean>();
 
-  for (const row of rows) {
+  for (const row of sessionsDb.getAllSessionsIncludingArchived()) {
     const provider = row.provider as SearchableProvider;
     if (!SUPPORTED_PROVIDERS.has(provider)) {
       continue;
@@ -170,13 +139,58 @@ function buildArchivedSessionIdsByPath(): Map<string, string> {
       isProjectArchived = projectArchiveStateByPath.get(normalizedProjectPath) === true;
     }
 
+    yield { path: normalizeIndexPath(rawJsonlPath), row: { ...row, provider }, isProjectArchived };
+  }
+}
+
+/**
+ * Shared FTS query. A malformed MATCH expression (should not happen after
+ * escaping) must not take down the SSE stream or the archive search; surface as
+ * "no results" instead.
+ */
+function queryIndex(safeQuery: string, safeLimit: number): SearchIndexHit[] {
+  const fetchLimit = Math.min(INDEX_FETCH_CAP, safeLimit * INDEX_FETCH_MULTIPLIER);
+  try {
+    return searchIndexDb.search(toFtsMatchLiteral(safeQuery), fetchLimit);
+  } catch (error) {
+    console.error('Session index search failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+/**
+ * Transcript-path → session row for every *visible* session: archived sessions
+ * stay (hidden from the sidebar list, but their history is still searchable),
+ * while sessions under an archived *project* are excluded — reachable via the
+ * archive view instead.
+ */
+function buildVisibleSessionsByPath(): Map<string, SearchableSessionRow> {
+  const byPath = new Map<string, SearchableSessionRow>();
+  for (const { path, row, isProjectArchived } of iterateIndexedSessions()) {
+    if (isProjectArchived) {
+      continue;
+    }
+    byPath.set(path, row);
+  }
+  return byPath;
+}
+
+/**
+ * Transcript-path → sessionId for every *archived* item — the mirror image of
+ * {@link buildVisibleSessionsByPath}, keeping what it drops. A session counts as
+ * archived when its own row is archived, or when its whole project is; both are
+ * surfaced in the sidebar's archive view and must be reachable by content there.
+ */
+function buildArchivedSessionIdsByPath(): Map<string, string> {
+  const byPath = new Map<string, string>();
+  for (const { path, row, isProjectArchived } of iterateIndexedSessions()) {
     if (row.isArchived !== 1 && !isProjectArchived) {
       continue;
     }
-
-    byPath.set(normalizeIndexPath(rawJsonlPath), row.session_id);
+    byPath.set(path, row.session_id);
   }
-
   return byPath;
 }
 
@@ -199,16 +213,7 @@ function searchArchivedConversationSessionIds(query: string, limit = 200): strin
     return [];
   }
 
-  const fetchLimit = Math.min(INDEX_FETCH_CAP, safeLimit * INDEX_FETCH_MULTIPLIER);
-  let hits: SearchIndexHit[];
-  try {
-    hits = searchIndexDb.search(toFtsMatchLiteral(safeQuery), fetchLimit);
-  } catch (error) {
-    console.error('Archived session index search failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return [];
-  }
+  const hits = queryIndex(safeQuery, safeLimit);
 
   const seen = new Set<string>();
   const sessionIds: string[] = [];
@@ -332,18 +337,7 @@ export async function searchConversations(
     return { results: [], totalMatches: 0, query: safeQuery };
   }
 
-  const fetchLimit = Math.min(INDEX_FETCH_CAP, safeLimit * INDEX_FETCH_MULTIPLIER);
-  let hits: SearchIndexHit[];
-  try {
-    hits = searchIndexDb.search(toFtsMatchLiteral(safeQuery), fetchLimit);
-  } catch (error) {
-    // A malformed MATCH expression (should not happen after escaping) must not
-    // take down the SSE stream; surface as "no results" instead.
-    console.error('Session index search failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { results: [], totalMatches: 0, query: safeQuery };
-  }
+  const hits = queryIndex(safeQuery, safeLimit);
 
   if (isAborted() || hits.length === 0) {
     return { results: [], totalMatches: 0, query: safeQuery };

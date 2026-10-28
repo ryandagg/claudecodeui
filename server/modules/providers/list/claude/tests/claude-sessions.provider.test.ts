@@ -58,3 +58,50 @@ test('user messages carry no dedupeKey (they fall back to existing echo dedup)',
   assert.equal(msgs.length, 1);
   assert.equal(msgs[0].dedupeKey, undefined);
 });
+
+test('api-request-blob entries never become ghost user messages', () => {
+  // The raw request payload sent to the model is persisted as an
+  // `api-request-blob`: it carries `message.role: 'user'` with the prompt text,
+  // but no `uuid` and no `timestamp`. If normalized, it would become a ghost
+  // duplicate with a freshly generated id + `new Date()` stamp on every read —
+  // one that epoch-sorts to the top server-side and flips to the bottom on the
+  // client. It must produce nothing.
+  const blob = {
+    type: 'api-request-blob',
+    sessionId: 'sid',
+    hash: 'abc123',
+    message: {
+      role: 'user',
+      content: [
+        { type: 'text', text: '<system-reminder>context</system-reminder>' },
+        { type: 'text', text: 'Write the numbers 1 to 40' },
+      ],
+    },
+  };
+  assert.deepEqual(provider.normalizeMessage(blob, 'sid'), []);
+});
+
+test('transcript bookkeeping entries are skipped, real turns are not', () => {
+  const bookkeeping = [
+    { type: 'queue-operation', operation: 'enqueue', sessionId: 'sid', timestamp: '2026-01-01T00:00:00.000Z' },
+    { type: 'last-prompt', lastPrompt: 'Write the numbers 1 to 40', leafUuid: 'x', sessionId: 'sid' },
+    { type: 'cost-state', sessionId: 'sid' },
+    { type: 'api-request', sessionId: 'sid' },
+  ];
+  for (const entry of bookkeeping) {
+    assert.deepEqual(provider.normalizeMessage(entry, 'sid'), [], `expected ${entry.type} to yield no messages`);
+  }
+
+  // A genuine user turn still normalizes to exactly one message with a stable,
+  // uuid-derived id (not a generated `claude_` ghost id).
+  const userRow = {
+    type: 'user',
+    uuid: 'u-real',
+    message: { role: 'user', content: [{ type: 'text', text: 'Write the numbers 1 to 40' }] },
+    timestamp: '2026-01-01T00:00:00.000Z',
+  };
+  const msgs = provider.normalizeMessage(userRow, 'sid');
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].content, 'Write the numbers 1 to 40');
+  assert.ok(!msgs[0].id.startsWith('claude_'));
+});

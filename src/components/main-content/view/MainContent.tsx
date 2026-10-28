@@ -37,6 +37,7 @@ function MainContent({
   onNavigateToSession,
   onSessionEstablished,
   onShowSettings,
+  onRestoreSession,
   externalMessageUpdate,
   newSessionTrigger,
 }: MainContentProps) {
@@ -159,6 +160,7 @@ function MainContent({
         shouldShowBrowserTab={false}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
+        onRestoreSession={onRestoreSession}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">

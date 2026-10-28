@@ -15,6 +15,7 @@ export default function MainContentHeader({
   shouldShowBrowserTab,
   isMobile,
   onMenuClick,
+  onRestoreSession,
 }: MainContentHeaderProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -46,6 +47,7 @@ export default function MainContentHeader({
             selectedProject={selectedProject}
             selectedSession={selectedSession}
             shouldShowTasksTab={shouldShowTasksTab}
+            onRestoreSession={onRestoreSession}
           />
         </div>
 

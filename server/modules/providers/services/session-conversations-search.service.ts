@@ -24,6 +24,12 @@ type SessionConversationResult = {
   sessionId: string;
   provider: SearchableProvider;
   sessionSummary: string;
+  /**
+   * Whether this session is itself archived (its project is still active —
+   * archived-project sessions are excluded from this search entirely). Lets the
+   * sidebar flag the hit and offer an inline restore without a follow-up query.
+   */
+  isArchived: boolean;
   matches: SessionConversationMatch[];
 };
 
@@ -96,12 +102,23 @@ function toSummaryText(customName: string | null, fallback: string | null | unde
  */
 type SearchableSessionRow = SessionRepositoryRow & { provider: SearchableProvider };
 
-function buildVisibleSessionsByPath(): Map<string, SearchableSessionRow> {
-  const rows = sessionsDb.getAllSessionsIncludingArchived();
-  const byPath = new Map<string, SearchableSessionRow>();
+type ClassifiedSession = {
+  /** Normalized (resolved) transcript path — the key the FTS index is matched on. */
+  path: string;
+  row: SearchableSessionRow;
+  isProjectArchived: boolean;
+};
+
+/**
+ * Single scan over every indexed session: validates provider + transcript path
+ * and resolves each project's archive state once (cached). The two path→session
+ * maps below are just different keep/drop predicates over this one pass, so a
+ * fix to the validation or path normalization can't drift between them.
+ */
+function* iterateIndexedSessions(): Generator<ClassifiedSession> {
   const projectArchiveStateByPath = new Map<string, boolean>();
 
-  for (const row of rows) {
+  for (const row of sessionsDb.getAllSessionsIncludingArchived()) {
     const provider = row.provider as SearchableProvider;
     if (!SUPPORTED_PROVIDERS.has(provider)) {
       continue;
@@ -112,21 +129,107 @@ function buildVisibleSessionsByPath(): Map<string, SearchableSessionRow> {
       continue;
     }
 
+    let isProjectArchived = false;
     const normalizedProjectPath = typeof row.project_path === 'string' ? row.project_path.trim() : '';
     if (normalizedProjectPath) {
       if (!projectArchiveStateByPath.has(normalizedProjectPath)) {
         const projectRow = projectsDb.getProjectPath(normalizedProjectPath);
         projectArchiveStateByPath.set(normalizedProjectPath, Boolean(projectRow?.isArchived));
       }
-      if (projectArchiveStateByPath.get(normalizedProjectPath) === true) {
-        continue;
-      }
+      isProjectArchived = projectArchiveStateByPath.get(normalizedProjectPath) === true;
     }
 
-    byPath.set(normalizeIndexPath(rawJsonlPath), { ...row, provider });
+    yield { path: normalizeIndexPath(rawJsonlPath), row: { ...row, provider }, isProjectArchived };
+  }
+}
+
+/**
+ * Shared FTS query. A malformed MATCH expression (should not happen after
+ * escaping) must not take down the SSE stream or the archive search; surface as
+ * "no results" instead.
+ */
+function queryIndex(safeQuery: string, safeLimit: number): SearchIndexHit[] {
+  const fetchLimit = Math.min(INDEX_FETCH_CAP, safeLimit * INDEX_FETCH_MULTIPLIER);
+  try {
+    return searchIndexDb.search(toFtsMatchLiteral(safeQuery), fetchLimit);
+  } catch (error) {
+    console.error('Session index search failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+/**
+ * Transcript-path → session row for every *visible* session: archived sessions
+ * stay (hidden from the sidebar list, but their history is still searchable),
+ * while sessions under an archived *project* are excluded — reachable via the
+ * archive view instead.
+ */
+function buildVisibleSessionsByPath(): Map<string, SearchableSessionRow> {
+  const byPath = new Map<string, SearchableSessionRow>();
+  for (const { path, row, isProjectArchived } of iterateIndexedSessions()) {
+    if (isProjectArchived) {
+      continue;
+    }
+    byPath.set(path, row);
+  }
+  return byPath;
+}
+
+/**
+ * Transcript-path → sessionId for every *archived* item — the mirror image of
+ * {@link buildVisibleSessionsByPath}, keeping what it drops. A session counts as
+ * archived when its own row is archived, or when its whole project is; both are
+ * surfaced in the sidebar's archive view and must be reachable by content there.
+ */
+function buildArchivedSessionIdsByPath(): Map<string, string> {
+  const byPath = new Map<string, string>();
+  for (const { path, row, isProjectArchived } of iterateIndexedSessions()) {
+    if (row.isArchived !== 1 && !isProjectArchived) {
+      continue;
+    }
+    byPath.set(path, row.session_id);
+  }
+  return byPath;
+}
+
+/**
+ * Runs the same FTS index as {@link searchConversations}, but scoped to
+ * archived items, and returns the distinct sessionIds whose transcript content
+ * matches. The archive view unions these with its metadata (title/path) filter
+ * so a string copied out of an archived conversation is findable there too.
+ */
+function searchArchivedConversationSessionIds(query: string, limit = 200): string[] {
+  const safeQuery = typeof query === 'string' ? query.trim() : '';
+  const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 200, 1000));
+
+  if (safeQuery.length < MIN_QUERY_LENGTH) {
+    return [];
   }
 
-  return byPath;
+  const archivedByPath = buildArchivedSessionIdsByPath();
+  if (archivedByPath.size === 0) {
+    return [];
+  }
+
+  const hits = queryIndex(safeQuery, safeLimit);
+
+  const seen = new Set<string>();
+  const sessionIds: string[] = [];
+  for (const hit of hits) {
+    if (sessionIds.length >= safeLimit) {
+      break;
+    }
+    const sessionId = archivedByPath.get(normalizeIndexPath(hit.jsonl_path));
+    if (!sessionId || seen.has(sessionId)) {
+      continue;
+    }
+    seen.add(sessionId);
+    sessionIds.push(sessionId);
+  }
+
+  return sessionIds;
 }
 
 type ProjectMetadata = { projectId: string | null; projectDisplayName: string };
@@ -234,18 +337,7 @@ export async function searchConversations(
     return { results: [], totalMatches: 0, query: safeQuery };
   }
 
-  const fetchLimit = Math.min(INDEX_FETCH_CAP, safeLimit * INDEX_FETCH_MULTIPLIER);
-  let hits: SearchIndexHit[];
-  try {
-    hits = searchIndexDb.search(toFtsMatchLiteral(safeQuery), fetchLimit);
-  } catch (error) {
-    // A malformed MATCH expression (should not happen after escaping) must not
-    // take down the SSE stream; surface as "no results" instead.
-    console.error('Session index search failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { results: [], totalMatches: 0, query: safeQuery };
-  }
+  const hits = queryIndex(safeQuery, safeLimit);
 
   if (isAborted() || hits.length === 0) {
     return { results: [], totalMatches: 0, query: safeQuery };
@@ -297,6 +389,7 @@ export async function searchConversations(
         sessionId,
         provider: session.provider,
         sessionSummary: toSummaryText(session.custom_name ?? null, hit.body, 'New Session'),
+        isArchived: session.isArchived === 1,
         matches: [],
       };
       resultBySessionId.set(sessionId, sessionResult);
@@ -361,5 +454,14 @@ export const sessionConversationsSearchService = {
       input.onProgress ?? null,
       input.signal ?? null,
     );
+  },
+
+  /**
+   * Returns the ids of archived sessions whose transcript content matches the
+   * query. Synchronous (better-sqlite3) and small by nature, so the route does
+   * not need the SSE streaming the active-conversation search uses.
+   */
+  searchArchivedSessionIds(query: string, limit = 200): string[] {
+    return searchArchivedConversationSessionIds(query, limit);
   },
 };

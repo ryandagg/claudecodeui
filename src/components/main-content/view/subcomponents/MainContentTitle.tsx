@@ -1,4 +1,5 @@
-import { GitBranch } from 'lucide-react';
+import { useState } from 'react';
+import { GitBranch, RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
@@ -13,7 +14,54 @@ type MainContentTitleProps = {
   selectedProject: Project;
   selectedSession: ProjectSession | null;
   shouldShowTasksTab: boolean;
+  onRestoreSession: (sessionId: string) => Promise<boolean>;
 };
+
+/**
+ * "Archived" badge + inline Restore for an archived session open in the chat
+ * pane — the restore surface for a session reached from a conversation-search
+ * hit, where the sidebar's Archive-tab restore button is out of reach.
+ */
+function ArchivedSessionControls({
+  sessionId,
+  onRestoreSession,
+}: {
+  sessionId: string;
+  onRestoreSession: (sessionId: string) => Promise<boolean>;
+}) {
+  const { t } = useTranslation();
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  const handleRestore = async () => {
+    if (isRestoring) {
+      return;
+    }
+    setIsRestoring(true);
+    const restored = await onRestoreSession(sessionId);
+    setIsRestoring(false);
+    if (!restored) {
+      alert(t('messages.restoreSessionError', 'Error restoring session. Please try again.'));
+    }
+  };
+
+  return (
+    <div className="flex flex-shrink-0 items-center gap-1.5">
+      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+        {t('archived.badge', 'Archived')}
+      </span>
+      <button
+        type="button"
+        onClick={handleRestore}
+        disabled={isRestoring}
+        className="flex items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-50 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+        title={t('archived.restore', 'Restore session')}
+      >
+        <RotateCcw className={`h-3 w-3 ${isRestoring ? 'animate-spin' : ''}`} />
+        {t('archived.restoreAction', 'Restore')}
+      </button>
+    </div>
+  );
+}
 
 function getTabTitle(activeTab: AppTab, shouldShowTasksTab: boolean, t: (key: string) => string, pluginDisplayName?: string) {
   if (activeTab.startsWith('plugin:') && pluginDisplayName) {
@@ -84,6 +132,7 @@ export default function MainContentTitle({
   selectedProject,
   selectedSession,
   shouldShowTasksTab,
+  onRestoreSession,
 }: MainContentTitleProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
@@ -112,9 +161,14 @@ export default function MainContentTitle({
       <div className="min-w-0 flex-1">
         {activeTab === 'chat' && selectedSession ? (
           <div className="min-w-0">
-            <h2 className="scrollbar-hide overflow-x-auto whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
-              {getSessionTitle(selectedSession)}
-            </h2>
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="scrollbar-hide overflow-x-auto whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
+                {getSessionTitle(selectedSession)}
+              </h2>
+              {selectedSession.__isArchived && (
+                <ArchivedSessionControls sessionId={selectedSession.id} onRestoreSession={onRestoreSession} />
+              )}
+            </div>
             <div className="flex items-center justify-between gap-3">
               <span className="truncate text-[11px] leading-tight text-muted-foreground" title={pathLabel}>{pathLabel}</span>
               <RepoBranchBadge projectId={selectedProject.projectId} />

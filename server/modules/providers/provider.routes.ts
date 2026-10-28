@@ -662,6 +662,15 @@ router.get(
   }),
 );
 
+router.get('/search/archived-sessions', asyncHandler(async (req: Request, res: Response) => {
+  // Content search scoped to archived items. Returns matching sessionIds the
+  // sidebar unions with its title/path filter; the SSE stream the active search
+  // uses is unnecessary here (synchronous DB read, bounded archive set).
+  const query = parseSessionSearchQuery(req.query.q);
+  const sessionIds = sessionConversationsSearchService.searchArchivedSessionIds(query, 200);
+  res.json(createApiSuccessResponse({ sessionIds }));
+}));
+
 router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) => {
   const query = parseSessionSearchQuery(req.query.q);
   const limit = parseSessionSearchLimit(req.query.limit);

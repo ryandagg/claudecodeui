@@ -47,6 +47,8 @@ type ConversationSession = {
   sessionId: string;
   sessionSummary: string;
   provider?: string;
+  /** Session is archived — surfaced so the result row can offer inline restore. */
+  isArchived?: boolean;
   matches: ConversationMatch[];
 };
 
@@ -83,6 +85,8 @@ export type ConversationResultTarget = {
   messageUuid?: string | null;
   /** The raw search query, re-highlighted inside the chat like Chrome's cmd+F. */
   query: string;
+  /** Session is archived — carried through so the chat header can offer restore. */
+  isArchived?: boolean;
 };
 
 /**
@@ -92,6 +96,13 @@ export type ConversationResultTarget = {
  * two activity signals stay consistent and terminal/external sessions surface.
  */
 const RECENT_ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Trigram FTS needs ≥3 chars; shorter queries can't match the index, so the
+ * archive content search isn't dispatched below this floor (matching the
+ * conversation SSE search).
+ */
+const MIN_CONTENT_SEARCH_LENGTH = 3;
 
 type ArchivedSessionsApiPayload = {
   success?: boolean;
@@ -177,11 +188,17 @@ export function useSidebarController({
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProjectListItem[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessionListItem[]>([]);
   const [isArchivedSessionsLoading, setIsArchivedSessionsLoading] = useState(false);
+  // Session ids whose transcript *content* matches the current archive search.
+  // The Archive-only view unions these with its title/path filter so a string
+  // copied out of an archived conversation is findable there, not just in the
+  // active Conversations full-text search.
+  const [archivedContentMatchIds, setArchivedContentMatchIds] = useState<Set<string>>(new Set());
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [optimisticStarByProjectId, setOptimisticStarByProjectId] = useState<Map<string, boolean>>(new Map());
   const [optimisticStarBySessionId, setOptimisticStarBySessionId] = useState<Map<string, boolean>>(new Map());
   const [loadingMoreProjects, setLoadingMoreProjects] = useState<Set<string>>(new Set());
   const searchSeqRef = useRef(0);
+  const archivedSearchSeqRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const starToggleSequenceByProjectRef = useRef<Map<string, number>>(new Map());
   const migrationStartedRef = useRef(false);
@@ -438,6 +455,49 @@ export function useSidebarController({
         eventSourceRef.current = null;
       }
     };
+  }, [debouncedSearchQuery, searchMode]);
+
+  // Archive-only content search. Mirrors the trigram floor and debounce of the
+  // conversation SSE search above, but hits a plain JSON endpoint (the archive
+  // set is bounded, so no streaming is needed) and keeps only the matching
+  // sessionIds. Below 3 chars — or outside the archive view — the set is empty
+  // and the archive filter falls back to title/path matching alone.
+  useEffect(() => {
+    const query = debouncedSearchQuery;
+    if (searchMode !== 'archived' || query.length < MIN_CONTENT_SEARCH_LENGTH) {
+      archivedSearchSeqRef.current += 1;
+      setArchivedContentMatchIds((previous) => (previous.size === 0 ? previous : new Set()));
+      return;
+    }
+
+    const seq = ++archivedSearchSeqRef.current;
+
+    void (async () => {
+      try {
+        const response = await api.searchArchivedSessions(query);
+        if (seq !== archivedSearchSeqRef.current) {
+          return;
+        }
+        if (!response.ok) {
+          setArchivedContentMatchIds((previous) => (previous.size === 0 ? previous : new Set()));
+          return;
+        }
+        const payload = (await response.json()) as { data?: { sessionIds?: unknown } };
+        if (seq !== archivedSearchSeqRef.current) {
+          return;
+        }
+        const ids = Array.isArray(payload.data?.sessionIds)
+          ? payload.data.sessionIds.filter((id): id is string => typeof id === 'string')
+          : [];
+        setArchivedContentMatchIds(new Set(ids));
+      } catch (error) {
+        if (seq !== archivedSearchSeqRef.current) {
+          return;
+        }
+        console.error('[Sidebar] Failed to search archived conversations:', error);
+        setArchivedContentMatchIds((previous) => (previous.size === 0 ? previous : new Set()));
+      }
+    })();
   }, [debouncedSearchQuery, searchMode]);
 
   // All sidebar state keys (expanded, starred, loading, etc.) use the DB
@@ -731,6 +791,11 @@ export function useSidebarController({
     }
 
     return archivedSessions.filter((session) => {
+      // Content match (transcript body) OR metadata match (title/path/provider).
+      if (archivedContentMatchIds.has(session.sessionId)) {
+        return true;
+      }
+
       const searchableFields = [
         session.sessionTitle,
         session.projectDisplayName,
@@ -740,7 +805,7 @@ export function useSidebarController({
 
       return searchableFields.some((value) => value.toLowerCase().includes(normalizedSearch));
     });
-  }, [archivedSessions, debouncedSearchQuery]);
+  }, [archivedContentMatchIds, archivedSessions, debouncedSearchQuery]);
 
   const filteredArchivedProjects = useMemo(() => {
     const normalizedSearch = debouncedSearchQuery.trim().toLowerCase();
@@ -759,6 +824,11 @@ export function useSidebarController({
       }
 
       return getAllSessions(project, hiddenSessionRegexes).some((session) => {
+        // Content match (transcript body) OR metadata match (summary/provider).
+        if (archivedContentMatchIds.has(String(session.id))) {
+          return true;
+        }
+
         const sessionSummary =
           typeof session.summary === 'string' && session.summary.trim().length > 0
             ? session.summary
@@ -772,7 +842,7 @@ export function useSidebarController({
         ].some((value) => value.toLowerCase().includes(normalizedSearch));
       });
     });
-  }, [archivedProjects, debouncedSearchQuery, hiddenSessionRegexes]);
+  }, [archivedContentMatchIds, archivedProjects, debouncedSearchQuery, hiddenSessionRegexes]);
 
   const startEditing = useCallback((project: Project) => {
     // `editingProject` is keyed by projectId so it stays stable across
@@ -925,6 +995,10 @@ export function useSidebarController({
       summary: session.sessionTitle,
       __provider: session.provider,
       __projectId: matchingProject?.projectId ?? session.projectId ?? undefined,
+      // Flag drives the chat-header restore affordance. Only meaningful when the
+      // session itself is archived under an *active* project — a session inside
+      // an archived project is restored at the project level, not here.
+      __isArchived: !session.isProjectArchived,
     };
 
     // Archived sessions still need a selected project context. Active projects
@@ -972,6 +1046,10 @@ export function useSidebarController({
       __searchTargetSnippet: target.messageSnippet || null,
       __searchTargetUuid: target.messageUuid || null,
       __searchQuery: target.query || null,
+      // Conversation search excludes archived-project sessions, so a hit flagged
+      // archived is always a standalone archived session — session-level restore
+      // (offered in the chat header) un-hides it.
+      __isArchived: Boolean(target.isArchived),
     });
   }, [handleProjectSelect, onSessionSelect, projects]);
 
@@ -1010,6 +1088,27 @@ export function useSidebarController({
         alert(t('messages.restoreSessionFailed', 'Failed to restore session. Please try again.'));
         return;
       }
+
+      // Drop the archived flag on any live conversation-search result for this
+      // session so an inline restore immediately clears its "Archived" chip and
+      // restore button without waiting for a re-search.
+      setConversationResults((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        let changed = false;
+        const results = previous.results.map((projectResult) => {
+          const sessions = projectResult.sessions.map((session) => {
+            if (session.sessionId === sessionId && session.isArchived) {
+              changed = true;
+              return { ...session, isArchived: false };
+            }
+            return session;
+          });
+          return changed ? { ...projectResult, sessions } : projectResult;
+        });
+        return changed ? { ...previous, results } : previous;
+      });
 
       await Promise.all([
         Promise.resolve(onRefresh()),

@@ -832,6 +832,36 @@ export function useProjectsState({
     [navigate, selectedSession?.id],
   );
 
+  /**
+   * Restores the currently-open archived session (un-hides it) and retires the
+   * chat header's archived treatment. Returns false on failure so the caller can
+   * surface a localized error. After the refresh the URL→session resync leaves
+   * `__isArchived` untouched (same id/provider ⇒ no update), so clear it here.
+   */
+  const restoreSelectedSession = useCallback(
+    async (sessionIdToRestore: string): Promise<boolean> => {
+      try {
+        const response = await api.restoreSession(sessionIdToRestore);
+        if (!response.ok) {
+          console.error('[AppContent] Failed to restore session:', response.status);
+          return false;
+        }
+
+        await refreshProjectsSilently();
+        setSelectedSession((previous) =>
+          previous && previous.id === sessionIdToRestore
+            ? { ...previous, __isArchived: false }
+            : previous,
+        );
+        return true;
+      } catch (error) {
+        console.error('[AppContent] Error restoring session:', error);
+        return false;
+      }
+    },
+    [refreshProjectsSilently],
+  );
+
   const handleSidebarRefresh = useCallback(async () => {
     try {
       const response = await api.projects({ sessionsLimit: 10 });
@@ -1014,5 +1044,6 @@ export function useProjectsState({
     loadMoreProjectSessions,
     handleProjectDelete,
     handleSidebarRefresh,
+    restoreSelectedSession,
   };
 }

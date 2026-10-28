@@ -43,6 +43,11 @@ export interface ProjectSession {
   // Tags the session with the owning project's DB `projectId` so UI handlers
   // (session switching, sidebar focus, etc.) can match against selectedProject.
   __projectId?: string;
+  // Set when the session is opened from an archived source (archive view or a
+  // conversation-search hit) and session-level restore un-hides it. Drives the
+  // chat header's "Archived" badge + Restore affordance. Archived sessions never
+  // appear in active project payloads, so this survives the URL→session resync.
+  __isArchived?: boolean;
   [key: string]: unknown;
 }
 

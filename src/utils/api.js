@@ -110,6 +110,10 @@ export const api = {
     }),
   getArchivedSessions: () =>
     authenticatedFetch('/api/providers/sessions/archived'),
+  // Content search scoped to archived items; returns matching sessionIds the
+  // sidebar unions with its title/path filter in the Archive-only view.
+  searchArchivedSessions: (query) =>
+    authenticatedFetch(`/api/providers/search/archived-sessions?q=${encodeURIComponent(query)}`),
   runningSessions: () =>
     authenticatedFetch('/api/providers/sessions/running'),
   restoreSession: (sessionId) =>

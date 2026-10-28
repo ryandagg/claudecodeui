@@ -84,6 +84,7 @@ function AppContentInner() {
     registerOptimisticSession,
     sidebarSharedProps,
     handleNewSession,
+    restoreSelectedSession,
   } = useProjectsState({
     sessionId,
     navigate,
@@ -287,6 +288,7 @@ function AppContentInner() {
             registerOptimisticSession({ sessionId: targetSessionId, ...context })
           }
           onShowSettings={openSettings}
+          onRestoreSession={restoreSelectedSession}
           externalMessageUpdate={externalMessageUpdate}
           newSessionTrigger={newSessionTrigger}
         />

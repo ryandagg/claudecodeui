@@ -30,8 +30,8 @@
  * | `role:user\|assistant\|tool`  | restrict message role (repeatable)             | — (text)                       |
  * | `provider:claude\|codex\|…`   | restrict provider (repeatable)                 | — (text)                       |
  * | `after:2026-10-01` `before:…` | date bound; also `today`, `yesterday`, `7d`, `2w`, `3m`, `1y` | — (text)        |
- * | `is:archived`                 | archived sessions only                         | exclude archived (default)     |
- * | `archived:include\|only\|exclude` | archived handling, explicit               | — (text)                       |
+ * | `is:archived`                 | archived items only (`archived:only`)          | `archived:exclude`             |
+ * | `archived:auto\|include\|only\|exclude` | archived handling, explicit (see {@link SearchArchived}) | — (text) |
  * | `is:running` / `is:favorite`  | only running / favorite sessions               | clears the flag                |
  * | `match:case\|word\|regex`     | match case / whole words / regular expression  | turns the option off           |
  * | `scope:<preset or name>`      | scope preset or named scope                    | — (text)                       |
@@ -61,7 +61,17 @@ export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 export const SEARCH_IN_VALUES = ['both', 'title', 'content'] as const;
 export type SearchIn = (typeof SEARCH_IN_VALUES)[number];
 
-export const SEARCH_ARCHIVED_VALUES = ['exclude', 'include', 'only'] as const;
+export const SEARCH_ARCHIVED_VALUES = ['auto', 'exclude', 'include', 'only'] as const;
+/**
+ * How archived items participate. An item is "archived" when the session is
+ * archived or its whole project is.
+ * - `auto` (default): archived sessions in active projects still match (flagged
+ *   `isArchived` so the UI can offer restore); sessions of archived projects
+ *   are hidden. This is the pre-existing conversation-search behavior.
+ * - `exclude`: no archived sessions, no archived-project sessions.
+ * - `include`: everything, archived projects included.
+ * - `only`: only archived items (the archive view).
+ */
 export type SearchArchived = (typeof SEARCH_ARCHIVED_VALUES)[number];
 
 /**
@@ -119,7 +129,7 @@ export function createSearchQuery(overrides: Partial<SearchQuery> = {}): SearchQ
     regex: false,
     after: null,
     before: null,
-    archived: 'exclude',
+    archived: 'auto',
     running: false,
     favorite: false,
     ...overrides,
@@ -399,7 +409,7 @@ function formatFilters(query: SearchQuery): string[] {
   if (query.after) add('after', query.after);
   if (query.before) add('before', query.before);
   if (query.archived === 'only') add('is', 'archived');
-  else if (query.archived === 'include') add('archived', 'include');
+  else if (query.archived !== 'auto') add('archived', query.archived);
   if (query.running) add('is', 'running');
   if (query.favorite) add('is', 'favorite');
   if (query.matchCase) add('match', 'case');

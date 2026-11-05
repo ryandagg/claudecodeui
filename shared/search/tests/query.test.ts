@@ -80,6 +80,9 @@ describe('parseSearchQuery — filters', () => {
     assert.equal(parseSearchQuery('is:archived').archived, 'only');
     assert.equal(parseSearchQuery('is:archived -is:archived').archived, 'exclude');
     assert.equal(parseSearchQuery('archived:include').archived, 'include');
+    assert.equal(parseSearchQuery('archived:exclude').archived, 'exclude');
+    assert.equal(parseSearchQuery('is:archived archived:auto').archived, 'auto');
+    assert.equal(parseSearchQuery('').archived, 'auto');
     assert.equal(parseSearchQuery('is:running').running, true);
     assert.equal(parseSearchQuery('is:favorite').favorite, true);
     assert.equal(parseSearchQuery('is:favorite -is:favorite').favorite, false);
@@ -236,13 +239,14 @@ describe('formatSearchQuery', () => {
     assert.equal(formatted, 'hello scope:all-projects project:a -project:b in:title match:case');
   });
 
-  it('omits defaults (in:both, archived:exclude, false flags)', () => {
-    assert.equal(formatSearchQuery(q({ text: 'x', in: 'both', archived: 'exclude' })), 'x');
+  it('omits defaults (in:both, archived:auto, false flags)', () => {
+    assert.equal(formatSearchQuery(q({ text: 'x', in: 'both', archived: 'auto' })), 'x');
   });
 
   it('emits archived modes', () => {
     assert.equal(formatSearchQuery(q({ archived: 'only' })), 'is:archived');
     assert.equal(formatSearchQuery(q({ archived: 'include' })), 'archived:include');
+    assert.equal(formatSearchQuery(q({ archived: 'exclude' })), 'archived:exclude');
   });
 
   it('quotes values that need it', () => {
@@ -262,6 +266,7 @@ describe('round-trip', () => {
     'path:"~/My Repos/*" -path:~/repos/worktrees/** in:title',
     'role:user role:assistant provider:codex after:2026-10-01 before:7d',
     'is:archived is:running is:favorite match:case match:word match:regex',
+    '-is:archived foo',
     'archived:include scope:"Work repos" text here',
     'project:"say \\"hi\\""',
     'rm -rf in:nowhere foo:bar "quoted   phrase"',

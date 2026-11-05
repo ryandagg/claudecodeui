@@ -61,6 +61,8 @@ describe('sessionInScope', () => {
     assert.equal(sessionInScope(s({ projectId: 'zz' }), st('all-projects'), ctx), true);
     assert.equal(sessionInScope(s({ id: 'run' }), st('running'), ctx), true);
     assert.equal(sessionInScope(s(), st('running'), ctx), false);
+    assert.equal(sessionInScope(s({ lastActivity: '2026-11-05T11:55:00Z' }), st('running'), ctx), true, 'active 5 min ago');
+    assert.equal(sessionInScope(s({ lastActivity: '2026-11-05T11:40:00Z' }), st('running'), ctx), false, 'active 20 min ago');
     assert.equal(sessionInScope(s({ starred: true }), st('favorites'), ctx), true);
     assert.equal(sessionInScope(s(), st('favorites'), ctx), false);
     assert.equal(sessionInScope(s({ id: 'a' }), st('recently-viewed'), ctx), true);

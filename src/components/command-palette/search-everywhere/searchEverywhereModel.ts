@@ -91,6 +91,13 @@ export type KeyLike =
 export const DOUBLE_SHIFT_WINDOW_MS = 400;
 /** A Shift held longer than this is a hold, not a tap. */
 export const DOUBLE_SHIFT_MAX_HOLD_MS = 300;
+/**
+ * A non-Shift key "held" longer than this is assumed lost (its keyup went to
+ * another window, a devtools pane, or a synthetic event never sent one) and no
+ * longer makes a Shift press a chord. Otherwise one lost keyup would disable
+ * double-Shift until the window blurred.
+ */
+export const HELD_KEY_STALE_MS = 1000;
 
 /**
  * IntelliJ-style double-Shift: two clean Shift taps within `windowMs`. A tap
@@ -104,7 +111,7 @@ export function createDoubleShiftDetector(windowMs = DOUBLE_SHIFT_WINDOW_MS, max
   let shiftDownAt: number | null = null;
   let dirty = false; // Shift was used as a modifier during this press
   let lastTapAt: number | null = null;
-  const otherKeysDown = new Set<string>();
+  const otherKeysDown = new Map<string, number>(); // key → keydown time
 
   return function feed(event: KeyLike): boolean {
     if (event.type === 'reset') {
@@ -123,7 +130,7 @@ export function createDoubleShiftDetector(windowMs = DOUBLE_SHIFT_WINDOW_MS, max
 
     if (event.key !== 'Shift') {
       if (event.type === 'keydown') {
-        otherKeysDown.add(event.key.toLowerCase());
+        otherKeysDown.set(event.key.toLowerCase(), event.timeStamp);
         dirty = true;
         lastTapAt = null;
       } else if (/^meta/i.test(event.key)) {
@@ -140,6 +147,9 @@ export function createDoubleShiftDetector(windowMs = DOUBLE_SHIFT_WINDOW_MS, max
       if (event.repeat) return false;
       shiftDownAt = event.timeStamp;
       // Another key still held (e.g. `a↓ Shift↓ a↑ Shift↑`) makes this a chord.
+      for (const [key, at] of otherKeysDown) {
+        if (event.timeStamp - at > HELD_KEY_STALE_MS) otherKeysDown.delete(key);
+      }
       dirty = otherKeysDown.size > 0;
       return false;
     }

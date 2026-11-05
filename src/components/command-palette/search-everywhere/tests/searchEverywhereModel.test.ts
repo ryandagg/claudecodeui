@@ -150,6 +150,16 @@ describe('createDoubleShiftDetector', () => {
     feed(down(160));
     assert.equal(feed(up(190)), true);
   });
+  it('a key whose keyup was lost stops counting as held after a second', () => {
+    const feed = createDoubleShiftDetector(400);
+    feed(down(0, 'KeyN')); // keyup never arrives
+    feed(down(500)); feed(up(520));
+    feed(down(560));
+    assert.equal(feed(up(590)), false, 'still within 1s: chord');
+    feed(down(1600)); feed(up(1620));
+    feed(down(1660));
+    assert.equal(feed(up(1690)), true);
+  });
   it('reset forgets a pending tap and held keys', () => {
     const feed = createDoubleShiftDetector(400);
     feed(down(0, 'KeyQ'));

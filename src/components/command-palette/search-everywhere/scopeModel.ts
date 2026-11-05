@@ -20,6 +20,12 @@ export const SCOPE_PRESETS = [
 export type ScopePreset = (typeof SCOPE_PRESETS)[number];
 
 export const RECENTLY_ACTIVE_DAYS = 7;
+/**
+ * "Running" matches the sidebar's Running view: a live run in this app, or any
+ * activity in the last 10 minutes (terminal/external sessions), the same window
+ * as useSidebarController's RECENT_ACTIVITY_WINDOW_MS.
+ */
+export const RUNNING_ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
 export const RECENT_VIEWED_LIMIT = 50;
 
 export function isScopePreset(value: unknown): value is ScopePreset {
@@ -65,19 +71,22 @@ export function sessionInScope(session: ScopedSession, state: ScopeState, ctx: S
     case 'all-projects':
       return true;
     case 'running':
-      return ctx.runningSessionIds.has(session.id);
+      return ctx.runningSessionIds.has(session.id) || isWithin(session.lastActivity, ctx.now, RUNNING_ACTIVITY_WINDOW_MS);
     case 'favorites':
       return Boolean(session.starred);
     case 'recently-viewed':
       return ctx.recentlyViewedIds.includes(session.id);
-    case 'recently-active': {
-      if (!session.lastActivity) return false;
-      const t = Date.parse(session.lastActivity);
-      return Number.isFinite(t) && ctx.now - t <= RECENTLY_ACTIVE_DAYS * 24 * 60 * 60 * 1000;
-    }
+    case 'recently-active':
+      return isWithin(session.lastActivity, ctx.now, RECENTLY_ACTIVE_DAYS * 24 * 60 * 60 * 1000);
     default:
       return true;
   }
+}
+
+function isWithin(iso: string | null | undefined, now: number, windowMs: number): boolean {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) && now - t <= windowMs;
 }
 
 /**

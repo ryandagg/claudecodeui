@@ -1350,6 +1350,33 @@ export async function readSessionActivityTimestamps(
 }
 
 /**
+ * Yields a file's lines, guaranteeing the underlying file descriptor is
+ * released however the caller stops iterating.
+ *
+ * `readline.Interface#close()` — which is all `for await` calls on an early
+ * `break`/`return`/throw — does NOT destroy its input stream, so a reader that
+ * stops before EOF leaks one fd per call. Hot paths (session previews on every
+ * project-list load) leaked thousands, until `child_process.spawn` began
+ * failing with `EBADF` and no new Claude query could start. Owning the stream
+ * here makes the `finally` run on every exit path, so callers can't get it
+ * wrong.
+ *
+ * Open/read errors (e.g. ENOENT) surface from the iteration, as with a bare
+ * readline interface.
+ */
+export async function* readFileLines(filePath: string): AsyncGenerator<string, void, undefined> {
+  const fileStream = fs.createReadStream(filePath);
+  const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+  try {
+    yield* lineReader;
+  } finally {
+    lineReader.close();
+    fileStream.destroy();
+  }
+}
+
+/**
  * Everything the synchronizer needs from a transcript, in a single pass.
  *
  * Identity, title and activity span all come from the same lines, so reading
@@ -1373,10 +1400,7 @@ export async function readSessionTranscriptFacts(filePath: string): Promise<{
   let latestTime = Number.NEGATIVE_INFINITY;
 
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-    for await (const line of lineReader) {
+    for await (const line of readFileLines(filePath)) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
@@ -1511,10 +1535,7 @@ export async function readSessionTitleCandidates(filePath: string): Promise<Set<
   const candidates = new Set<string>();
 
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-    for await (const line of lineReader) {
+    for await (const line of readFileLines(filePath)) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
@@ -1636,10 +1657,7 @@ export async function buildLookupMap(
   const lookup = new Map<string, string>();
 
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-    for await (const line of lineReader) {
+    for await (const line of readFileLines(filePath)) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
@@ -1672,10 +1690,7 @@ export async function extractFirstValidJsonlData<T>(
   extractor: (parsedJson: unknown) => T | null | undefined
 ): Promise<T | null> {
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-    for await (const line of lineReader) {
+    for await (const line of readFileLines(filePath)) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
@@ -1684,8 +1699,6 @@ export async function extractFirstValidJsonlData<T>(
       const parsed = JSON.parse(trimmed);
       const extracted = extractor(parsed);
       if (extracted) {
-        lineReader.close();
-        fileStream.close();
         return extracted;
       }
     }

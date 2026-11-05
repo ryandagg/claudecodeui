@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -102,4 +103,28 @@ test('tolerates malformed JSONL lines mid-stream', async () => {
   );
 
   assert.equal(await readFirstUserMessagePreview(filePath), 'recovered prompt');
+});
+
+// Regression: an early return used to close only the readline interface,
+// leaking the ReadStream's fd on every call. The project list calls this for
+// every unnamed session on each load, so a long-running server accumulated
+// thousands of fds until child_process.spawn failed with EBADF. The fixture is
+// larger than the 64 KiB stream highWaterMark so EOF can't auto-close the fd.
+test('releases the file descriptor after an early-match preview', async () => {
+  const padding = Array.from({ length: 3000 }, (_, i) => userTextMessage(`later prompt ${i} ${'x'.repeat(40)}`));
+  const filePath = await writeTranscript([userTextMessage('first prompt'), ...padding]);
+  const openFdCount = () => fsSync.readdirSync('/dev/fd').length;
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(await readFirstUserMessagePreview(filePath), 'first prompt');
+  await settle();
+  const before = openFdCount();
+
+  for (let i = 0; i < 25; i += 1) {
+    await readFirstUserMessagePreview(filePath);
+  }
+  await settle();
+
+  const growth = openFdCount() - before;
+  assert.ok(growth < 5, `expected no fd leak, but open fds grew by ${growth} over 25 previews`);
 });

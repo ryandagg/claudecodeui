@@ -269,5 +269,41 @@
   },
   "tooltips": {
     "renameNeedsTranscript": "Send a message before renaming this session"
+  },
+  "searchEverywhere": {
+    "title": "Search Everywhere",
+    "tabsLabel": "Search categories",
+    "tabHint": "Tab / ⇧Tab to switch",
+    "placeholder": "Search sessions, messages, files, actions…",
+    "noResults": "No results.",
+    "more_one": "More… ({{count}})",
+    "more_other": "More… ({{count}})",
+    "tabs": {
+      "all": "All",
+      "sessions": "Sessions",
+      "messages": "Messages",
+      "files": "Files",
+      "text": "Text",
+      "actions": "Actions",
+      "git": "Git"
+    },
+    "groups": {
+      "actions": "Actions",
+      "sessions": "Sessions",
+      "messages": "Messages",
+      "files": "Files",
+      "git": "Git"
+    },
+    "messages": {
+      "minChars_one": "Type at least {{count}} character to search message content",
+      "minChars_other": "Type at least {{count}} characters to search message content",
+      "searching": "Searching messages…"
+    },
+    "actions": {
+      "newChat": "Start new chat",
+      "selectProjectFirst": "Select a project first",
+      "openSettings": "Open settings",
+      "toggleTheme": "Toggle theme"
+    }
   }
 }

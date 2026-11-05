@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
 import CommandPalette from '../command-palette/CommandPalette';
+import SearchEverywhereDialog from '../command-palette/search-everywhere/SearchEverywhereDialog';
+import { useSearchEverywhereFlag } from '../command-palette/search-everywhere/useSearchEverywhereFlag';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/PaletteOpsContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
@@ -84,6 +86,8 @@ function AppContentInner() {
     registerOptimisticSession,
     sidebarSharedProps,
     handleNewSession,
+    handleProjectSelect,
+    handleSessionSelect,
     restoreSelectedSession,
   } = useProjectsState({
     sessionId,
@@ -92,6 +96,8 @@ function AppContentInner() {
     isMobile,
     activeSessions: processingSessions,
   });
+
+  const searchEverywhereEnabled = useSearchEverywhereFlag();
 
   const refreshRunningSessions = useCallback(async () => {
     try {
@@ -294,12 +300,24 @@ function AppContentInner() {
         />
       </div>
 
-      <CommandPalette
-        selectedProject={selectedProject}
-        onStartNewChat={handleNewSession}
-        onOpenSettings={() => openSettings()}
-        onShowTab={setActiveTab}
-      />
+      {searchEverywhereEnabled ? (
+        <SearchEverywhereDialog
+          projects={sidebarSharedProps.projects}
+          selectedProject={selectedProject}
+          onStartNewChat={handleNewSession}
+          onOpenSettings={(tab) => openSettings(tab)}
+          onShowTab={setActiveTab}
+          onSelectProject={handleProjectSelect}
+          onSelectSession={handleSessionSelect}
+        />
+      ) : (
+        <CommandPalette
+          selectedProject={selectedProject}
+          onStartNewChat={handleNewSession}
+          onOpenSettings={() => openSettings()}
+          onShowTab={setActiveTab}
+        />
+      )}
     </div>
   );
 }

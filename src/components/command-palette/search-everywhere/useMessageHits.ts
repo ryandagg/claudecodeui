@@ -47,6 +47,9 @@ export function useMessageHits(query: string, enabled: boolean) {
 
     let es: EventSource | null = null;
     let cancelled = false;
+    // Drop the previous query's hits immediately: they must not linger through
+    // the debounce, nor survive a new query that matches nothing.
+    setHits([]);
     setLoading(true);
 
     const handle = setTimeout(() => {

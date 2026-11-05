@@ -304,6 +304,7 @@
       "selectProjectFirst": "Select a project first",
       "openSettings": "Open settings",
       "toggleTheme": "Toggle theme"
-    }
+    },
+    "tabAnnouncement": "{{tab}} tab"
   }
 }

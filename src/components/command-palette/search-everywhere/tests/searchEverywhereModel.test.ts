@@ -110,6 +110,57 @@ describe('createDoubleShiftDetector', () => {
     feed(down(80));
     assert.equal(feed(up(100)), false);
   });
+  it('a long hold is not a tap', () => {
+    const feed = createDoubleShiftDetector(400, 300);
+    feed(down(0)); feed(up(50));
+    feed(down(60));
+    assert.equal(feed(up(2060)), false);
+    // the hold also cleared the pending first tap
+    feed(down(2100));
+    assert.equal(feed(up(2150)), false);
+  });
+  it('Shift+click makes Shift a modifier', () => {
+    const feed = createDoubleShiftDetector(400);
+    feed(down(0)); feed({ type: 'pointerdown', timeStamp: 10 }); feed(up(40));
+    feed(down(80));
+    assert.equal(feed(up(110)), false);
+    // two Shift+clicks never fire
+    feed(down(200)); feed({ type: 'pointerdown', timeStamp: 210 }); feed(up(230));
+    assert.equal(feed(up(260)), false);
+  });
+  it('a click between clean taps breaks the pair', () => {
+    const feed = createDoubleShiftDetector(400);
+    feed(down(0)); feed(up(30));
+    feed({ type: 'pointerdown', timeStamp: 50 });
+    feed(down(80));
+    assert.equal(feed(up(110)), false);
+  });
+  it('Shift pressed while another key is still held is a chord', () => {
+    const feed = createDoubleShiftDetector(400);
+    feed(down(0, 'KeyA')); feed(down(10)); feed(up(20, 'KeyA')); feed(up(30));
+    feed(down(60));
+    assert.equal(feed(up(90)), false, 'first press was dirty, so no pending tap');
+    feed(down(120));
+    assert.equal(feed(up(150)), true);
+  });
+  it('a Meta release clears keys whose keyup macOS swallowed', () => {
+    const feed = createDoubleShiftDetector(400);
+    feed(down(0, 'MetaLeft')); feed(down(10, 'KeyK')); feed(up(40, 'MetaLeft')); // no KeyK keyup
+    feed(down(100)); feed(up(120));
+    feed(down(160));
+    assert.equal(feed(up(190)), true);
+  });
+  it('reset forgets a pending tap and held keys', () => {
+    const feed = createDoubleShiftDetector(400);
+    feed(down(0, 'KeyQ'));
+    feed({ type: 'reset', timeStamp: 0 });
+    feed(down(10)); feed(up(30));
+    feed({ type: 'reset', timeStamp: 0 });
+    feed(down(60));
+    assert.equal(feed(up(90)), false);
+    feed(down(120));
+    assert.equal(feed(up(150)), true);
+  });
   it('keyup without keydown is ignored', () => {
     const feed = createDoubleShiftDetector(400);
     assert.equal(feed(up(10)), false);

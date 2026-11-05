@@ -81,46 +81,74 @@ export function tabForBinding(
 // Double-Shift
 // ---------------------------------------------------------------------------
 
-export type KeyLike = {
-  type: 'keydown' | 'keyup';
-  key: string;
-  repeat?: boolean;
-  timeStamp: number;
-};
+export type KeyLike =
+  | { type: 'keydown' | 'keyup'; key: string; repeat?: boolean; timeStamp: number }
+  /** Any pointer press (click, tap). Pressed with Shift held it makes Shift a modifier. */
+  | { type: 'pointerdown'; timeStamp: number }
+  /** Window lost focus: forget everything, keyups may never arrive. */
+  | { type: 'reset'; timeStamp: number };
 
 export const DOUBLE_SHIFT_WINDOW_MS = 400;
+/** A Shift held longer than this is a hold, not a tap. */
+export const DOUBLE_SHIFT_MAX_HOLD_MS = 300;
 
 /**
- * IntelliJ-style double-Shift: two clean Shift taps (press+release with no
- * other key in between) within `windowMs`. Holding Shift to type a capital, a
- * Shift+click chord, or key-repeat never counts. Returns a feed function that
- * reports `true` on the event that completes the gesture.
+ * IntelliJ-style double-Shift: two clean Shift taps within `windowMs`. A tap
+ * is a Shift press+release that is short (≤ `maxHoldMs`), starts with no other
+ * key held, and sees no other key or pointer press before release. So Shift as
+ * a modifier (typing a capital, Shift+click range selection), a long hold, and
+ * key-repeat never count. Returns a feed function that reports `true` on the
+ * event that completes the gesture.
  */
-export function createDoubleShiftDetector(windowMs = DOUBLE_SHIFT_WINDOW_MS) {
-  let shiftDown = false;
-  let dirty = false; // another key went down while Shift was held
+export function createDoubleShiftDetector(windowMs = DOUBLE_SHIFT_WINDOW_MS, maxHoldMs = DOUBLE_SHIFT_MAX_HOLD_MS) {
+  let shiftDownAt: number | null = null;
+  let dirty = false; // Shift was used as a modifier during this press
   let lastTapAt: number | null = null;
+  const otherKeysDown = new Set<string>();
 
   return function feed(event: KeyLike): boolean {
+    if (event.type === 'reset') {
+      shiftDownAt = null;
+      dirty = false;
+      lastTapAt = null;
+      otherKeysDown.clear();
+      return false;
+    }
+
+    if (event.type === 'pointerdown') {
+      if (shiftDownAt !== null) dirty = true;
+      lastTapAt = null;
+      return false;
+    }
+
     if (event.key !== 'Shift') {
       if (event.type === 'keydown') {
+        otherKeysDown.add(event.key.toLowerCase());
         dirty = true;
         lastTapAt = null;
+      } else if (/^meta/i.test(event.key)) {
+        // macOS swallows keyups of keys pressed while Cmd was held, so a
+        // Cmd release is the only reliable "those are up now" signal.
+        otherKeysDown.clear();
+      } else {
+        otherKeysDown.delete(event.key.toLowerCase());
       }
       return false;
     }
 
     if (event.type === 'keydown') {
       if (event.repeat) return false;
-      shiftDown = true;
-      dirty = false;
+      shiftDownAt = event.timeStamp;
+      // Another key still held (e.g. `a↓ Shift↓ a↑ Shift↑`) makes this a chord.
+      dirty = otherKeysDown.size > 0;
       return false;
     }
 
     // keyup Shift
-    if (!shiftDown) return false;
-    shiftDown = false;
-    if (dirty) {
+    if (shiftDownAt === null) return false;
+    const heldFor = event.timeStamp - shiftDownAt;
+    shiftDownAt = null;
+    if (dirty || heldFor > maxHoldMs) {
       lastTapAt = null;
       return false;
     }

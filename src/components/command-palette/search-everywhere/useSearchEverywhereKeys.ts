@@ -10,6 +10,12 @@ import {
   type SearchTabId,
 } from './searchEverywhereModel';
 
+/**
+ * Detector key id: Shift stays "Shift"; everything else uses the physical
+ * `code`, so `a↓ Shift↓ A↑` (key changes case mid-press) still pairs up.
+ */
+const detectorKey = (e: KeyboardEvent) => (e.key === 'Shift' ? 'Shift' : e.code || e.key);
+
 type Handlers = {
   /** Cmd/Ctrl+K: toggle on the All tab. */
   onToggle: () => void;
@@ -42,7 +48,7 @@ export function useSearchEverywhereTriggers(
       if (isCmdK) {
         e.preventDefault();
         handlersRef.current.onToggle();
-        feed({ type: 'keydown', key: e.key, timeStamp: e.timeStamp, repeat: e.repeat });
+        feed({ type: 'keydown', key: detectorKey(e), timeStamp: e.timeStamp, repeat: e.repeat });
         return;
       }
 
@@ -51,11 +57,11 @@ export function useSearchEverywhereTriggers(
         e.preventDefault();
         handlersRef.current.onOpenTab(tab);
       }
-      feed({ type: 'keydown', key: e.key, timeStamp: e.timeStamp, repeat: e.repeat });
+      feed({ type: 'keydown', key: detectorKey(e), timeStamp: e.timeStamp, repeat: e.repeat });
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      const fired = feed({ type: 'keyup', key: e.key, timeStamp: e.timeStamp });
+      const fired = feed({ type: 'keyup', key: detectorKey(e), timeStamp: e.timeStamp });
       if (!fired) return;
       const inDialog = e.target instanceof Element && e.target.closest('[data-search-everywhere]');
       if (inDialog) return; // already open; #16 makes this "widen scope"
@@ -64,16 +70,20 @@ export function useSearchEverywhereTriggers(
     };
 
     // Losing focus mid-gesture (e.g. Shift then Cmd+Tab away) must not leave a
-    // half-recorded tap that completes on return.
-    const onBlur = () => feed({ type: 'keydown', key: 'Unidentified', timeStamp: 0 });
+    // half-recorded tap, or a key we never see released, behind.
+    const onBlur = () => feed({ type: 'reset', timeStamp: 0 });
+    // Shift+click (range select in the file tree / sidebar) is Shift as a modifier.
+    const onPointerDown = (e: PointerEvent) => { feed({ type: 'pointerdown', timeStamp: e.timeStamp }); };
 
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('pointerdown', onPointerDown, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('pointerdown', onPointerDown, true);
     };
   }, [enabled]);
 }
@@ -95,6 +105,8 @@ export function useSearchEverywhereDialogKeys(open: boolean, handlers: InDialogH
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (e: KeyboardEvent) => {
+      // Leave keys alone while an IME is composing (Tab may confirm a candidate).
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         e.stopPropagation();

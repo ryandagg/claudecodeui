@@ -347,6 +347,8 @@ export default function SearchEverywhereDialog({
                 // focusable element, and that must stay the search input.
                 <div
                   key={def.id}
+                  id={`se-tab-${def.id}`}
+                  aria-controls="se-results"
                   role="tab"
                   aria-selected={active}
                   data-tab={def.id}
@@ -371,6 +373,14 @@ export default function SearchEverywhereDialog({
             value={search}
             onValueChange={setSearch}
           />
+          <div aria-live="polite" className="sr-only">
+            {t('searchEverywhere.tabAnnouncement', {
+              tab: t(TABS.find((d) => d.id === tab)?.labelKey ?? '', TABS.find((d) => d.id === tab)?.defaultLabel ?? ''),
+              defaultValue: '{{tab}} tab',
+            })}
+          </div>
+          {/* cmdk owns the List's id, so the tabpanel is a wrapper. */}
+          <div role="tabpanel" id="se-results" aria-labelledby={`se-tab-${tab}`}>
           <CommandList ref={listRef} className="max-h-[min(60vh,480px)]">
             {groups.map((group) => (
               (group.rows.length > 0 || group.status) && (
@@ -405,6 +415,7 @@ export default function SearchEverywhereDialog({
               </div>
             )}
           </CommandList>
+          </div>
         </Command>
       </DialogContent>
     </Dialog>

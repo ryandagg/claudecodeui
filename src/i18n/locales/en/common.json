@@ -305,6 +305,22 @@
       "openSettings": "Open settings",
       "toggleTheme": "Toggle theme"
     },
-    "tabAnnouncement": "{{tab}} tab"
+    "tabAnnouncement": "{{tab}} tab",
+    "scope": {
+      "label": "Search scope",
+      "includeArchived": "Include archived",
+      "includeArchivedHint": "Include archived (⌥N or double-Shift again widens scope)",
+      "archivedBadge": "Archived",
+      "currentProjectOnly": "Files and Git always search the current project",
+      "presets": {
+        "current-project": "Current project",
+        "all-projects": "All projects",
+        "running": "Running",
+        "favorites": "Favorites",
+        "recently-viewed": "Recently viewed",
+        "recently-active": "Recently active (7 days)",
+        "archived": "Archived"
+      }
+    }
   }
 }

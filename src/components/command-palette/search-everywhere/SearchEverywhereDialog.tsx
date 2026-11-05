@@ -48,6 +48,17 @@ import {
   type SearchTabId,
 } from './searchEverywhereModel';
 import { MIN_MESSAGE_QUERY, useMessageHits } from './useMessageHits';
+import ScopeSelector from './ScopeSelector';
+import {
+  effectiveScope,
+  orderForScope,
+  sessionInScope,
+  widenScope,
+  type ScopeContext,
+  type ScopePreset,
+  type ScopedSession,
+} from './scopeModel';
+import { useArchivedSessions, usePersistentScope } from './useScopeData';
 import { useSearchEverywhereDialogKeys, useSearchEverywhereTriggers } from './useSearchEverywhereKeys';
 
 /** Tabs with a data source today. `text` joins when #23 lands. */
@@ -58,6 +69,8 @@ const TABS = visibleTabs(AVAILABLE_TABS);
 const ALL_TAB_LIMIT = 5;
 /** Rows rendered on a dedicated tab (virtualisation arrives with #25). */
 const TAB_LIMIT = 100;
+
+const NO_PROJECT_DISABLED: ReadonlySet<ScopePreset> = new Set<ScopePreset>(['current-project']);
 
 type GroupId = 'actions' | 'sessions' | 'messages' | 'files' | 'git';
 
@@ -83,9 +96,21 @@ type SearchEverywhereDialogProps = {
   onShowTab?: (tab: AppTab) => void;
   onSelectProject: (project: Project) => void;
   onSelectSession: (session: ProjectSession) => void;
+  /** Ids of sessions with a live run (sidebar's activity map keys). */
+  runningSessionIds: ReadonlySet<string>;
+  /** Most-recent-first ids of sessions the user has opened. */
+  recentlyViewedIds: readonly string[];
 };
 
-type SessionEntry = { session: ProjectSession; project: Project | null; label: string };
+type SessionEntry = { session: ProjectSession; project: Project | null; label: string; isArchived?: boolean };
+
+const toScoped = (entry: SessionEntry): ScopedSession => ({
+  id: entry.session.id,
+  projectId: entry.project?.projectId ?? entry.session.__projectId ?? null,
+  starred: Boolean(entry.session.starred_at),
+  lastActivity: entry.session.lastActivity || entry.session.updated_at || null,
+  isArchived: entry.isArchived,
+});
 
 export default function SearchEverywhereDialog({
   projects,
@@ -95,6 +120,8 @@ export default function SearchEverywhereDialog({
   onShowTab,
   onSelectProject,
   onSelectSession,
+  runningSessionIds,
+  recentlyViewedIds,
 }: SearchEverywhereDialogProps) {
   const { t } = useTranslation('common');
   const [open, setOpen] = React.useState(false);
@@ -104,6 +131,9 @@ export default function SearchEverywhereDialog({
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const { toggleDarkMode } = useTheme();
   const ops = usePaletteOps();
+  const [storedScope, setScope] = usePersistentScope('dialog');
+  const scope = effectiveScope(storedScope, selectedProject?.projectId);
+  const widen = React.useCallback(() => setScope(widenScope(scope)), [scope, setScope]);
 
   useSearchEverywhereTriggers(TABS, true, {
     onToggle: () => {
@@ -114,6 +144,7 @@ export default function SearchEverywhereDialog({
       setTab(next);
       setOpen(true);
     },
+    onWiden: widen,
   });
 
   React.useEffect(() => {
@@ -137,6 +168,7 @@ export default function SearchEverywhereDialog({
   useSearchEverywhereDialogKeys(open, {
     onCycle: (direction) => setTab((current) => cycleTab(TABS, current, direction)),
     onJump: jumpTo,
+    onWiden: widen,
   });
 
   const projectId = selectedProject?.projectId;
@@ -148,6 +180,17 @@ export default function SearchEverywhereDialog({
   const branches = useBranchesSource(projectId, wants('git'));
   const git = useGitActions(projectId);
   const { hits: messageHits, loading: messagesLoading } = useMessageHits(search, wants('messages'));
+  const archivedSessions = useArchivedSessions(
+    (wants('sessions') || wants('messages')) && (scope.includeArchived || scope.scope === 'archived'),
+  );
+
+  const scopeCtx = React.useMemo<ScopeContext>(() => ({
+    selectedProjectId: selectedProject?.projectId,
+    runningSessionIds,
+    recentlyViewedIds,
+    now: Date.now(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [selectedProject?.projectId, runningSessionIds, recentlyViewedIds, open]);
 
   const run = React.useCallback((fn: () => void) => {
     setOpen(false);
@@ -175,8 +218,48 @@ export default function SearchEverywhereDialog({
       if (project.projectId === projectId) continue;
       for (const s of project.sessions ?? []) push(s, project);
     }
+    // Standalone archived sessions (their project is still active). Sessions
+    // of archived projects can't open without the archive view's project
+    // context, so they wait for server-side scoping (#13).
+    for (const a of archivedSessions) {
+      if (a.isProjectArchived || seen.has(a.sessionId)) continue;
+      seen.add(a.sessionId);
+      const project = projects.find((p) => p.projectId === a.projectId) ?? null;
+      out.push({
+        session: {
+          id: a.sessionId,
+          summary: a.sessionTitle,
+          __provider: a.provider,
+          __projectId: a.projectId ?? undefined,
+          lastActivity: a.lastActivity ?? undefined,
+          __isArchived: true,
+        },
+        project,
+        label: a.sessionTitle || a.sessionId,
+        isArchived: true,
+      });
+    }
     return out;
-  }, [fetchedSessions, projectId, projects, selectedProject]);
+  }, [archivedSessions, fetchedSessions, projectId, projects, selectedProject]);
+
+  const scopedSessions = React.useMemo(
+    () => orderForScope(sessionEntries.filter((e) => sessionInScope(toScoped(e), scope, scopeCtx)), scope, scopeCtx, (e) => e.session.id),
+    [scope, scopeCtx, sessionEntries],
+  );
+
+  const scopedHits = React.useMemo(() => {
+    const byId = new Map(sessionEntries.map((e) => [e.session.id, e]));
+    return messageHits.filter((hit) => {
+      const known = byId.get(hit.sessionId);
+      return sessionInScope({
+        id: hit.sessionId,
+        projectId: hit.projectId,
+        starred: known ? Boolean(known.session.starred_at) : false,
+        lastActivity: known ? toScoped(known).lastActivity : hit.timestamp,
+        isArchived: hit.isArchived,
+      }, scope, scopeCtx);
+    });
+  }, [messageHits, scope, scopeCtx, sessionEntries]);
 
   const openSession = React.useCallback((entry: SessionEntry) => {
     run(() => {
@@ -259,11 +342,12 @@ export default function SearchEverywhereDialog({
     })));
 
     // Sessions
-    const rankedSessions = filterAndRank(sessionEntries, q, (e) => e.label, (e) => [e.project?.displayName]);
+    const rankedSessions = filterAndRank(scopedSessions, q, (e) => e.label, (e) => [e.project?.displayName]);
     add('sessions', 'sessions', t('searchEverywhere.groups.sessions', 'Sessions'), rankedSessions.map((e) => ({
       key: `session:${e.session.id}`,
       icon: MessageSquare,
       label: e.label,
+      detail: e.isArchived ? t('searchEverywhere.scope.archivedBadge', 'Archived') : undefined,
       hint: e.project?.displayName,
       onSelect: () => openSession(e),
     })));
@@ -283,7 +367,7 @@ export default function SearchEverywhereDialog({
         </span>
       );
     }
-    add('messages', 'messages', t('searchEverywhere.groups.messages', 'Messages'), messageHits.map((hit, index) => ({
+    add('messages', 'messages', t('searchEverywhere.groups.messages', 'Messages'), scopedHits.map((hit, index) => ({
       key: `message:${hit.sessionId}:${hit.messageUuid ?? hit.timestamp ?? index}:${index}`,
       icon: MessagesSquare,
       label: <HighlightedSnippet text={hit.snippet} highlights={hit.highlights} />,
@@ -323,7 +407,7 @@ export default function SearchEverywhereDialog({
     ]);
 
     return out;
-  }, [actions, branches, commits, files, git, messageHits, messagesLoading, onShowTab, openMessageHit, openSession, ops, run, search, sessionEntries, t, tab]);
+  }, [actions, branches, commits, files, git, scopedHits, messagesLoading, onShowTab, openMessageHit, openSession, ops, run, scopedSessions, search, t, tab]);
 
   const totalRows = groups.reduce((n, g) => n + g.rows.length, 0);
   const anyStatus = groups.some((g) => g.status);
@@ -367,6 +451,18 @@ export default function SearchEverywhereDialog({
             <span className="ml-auto hidden whitespace-nowrap pb-1.5 text-[10px] text-muted-foreground sm:inline">
               {t('searchEverywhere.tabHint', 'Tab / ⇧Tab to switch')}
             </span>
+          </div>
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
+            <ScopeSelector
+              value={scope}
+              onChange={setScope}
+              disabledPresets={selectedProject ? undefined : NO_PROJECT_DISABLED}
+            />
+            {(tab === 'files' || tab === 'git') && (
+              <span className="truncate text-[10px] text-muted-foreground">
+                {t('searchEverywhere.scope.currentProjectOnly', 'Files and Git always search the current project')}
+              </span>
+            )}
           </div>
           <CommandInput
             placeholder={t('searchEverywhere.placeholder', 'Search sessions, messages, files, actions…')}

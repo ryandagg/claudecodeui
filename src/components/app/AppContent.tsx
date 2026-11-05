@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -7,6 +7,7 @@ import MainContent from '../main-content/view/MainContent';
 import CommandPalette from '../command-palette/CommandPalette';
 import SearchEverywhereDialog from '../command-palette/search-everywhere/SearchEverywhereDialog';
 import { useSearchEverywhereFlag } from '../command-palette/search-everywhere/useSearchEverywhereFlag';
+import { useRecentlyViewedSessions } from '../command-palette/search-everywhere/useScopeData';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/PaletteOpsContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
@@ -98,6 +99,11 @@ function AppContentInner() {
   });
 
   const searchEverywhereEnabled = useSearchEverywhereFlag();
+  const recentlyViewedIds = useRecentlyViewedSessions(selectedSession?.id);
+  const runningSessionIds = useMemo(
+    () => new Set(processingSessions.keys()),
+    [processingSessions],
+  );
 
   const refreshRunningSessions = useCallback(async () => {
     try {
@@ -309,6 +315,8 @@ function AppContentInner() {
           onShowTab={setActiveTab}
           onSelectProject={handleProjectSelect}
           onSelectSession={handleSessionSelect}
+          runningSessionIds={runningSessionIds}
+          recentlyViewedIds={recentlyViewedIds}
         />
       ) : (
         <CommandPalette

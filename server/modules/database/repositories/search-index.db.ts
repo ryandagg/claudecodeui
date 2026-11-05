@@ -28,6 +28,26 @@ export type SearchIndexHit = {
   rank: number;
 };
 
+export type SessionMatchSearchParams = {
+  /** Escaped via {@link toFtsMatchLiteral}. */
+  matchLiteral: string;
+  jsonlPaths?: readonly string[] | null;
+  projectPaths?: { include?: readonly string[] | null; exclude?: readonly string[] | null } | null;
+  roles?: readonly string[] | null;
+  after?: string | null;
+  before?: string | null;
+  perSessionLimit: number;
+  limit: number;
+  offset?: number;
+};
+
+export type SessionMatchRow = SearchIndexHit & {
+  /** 1-based rank of this row within its session. */
+  session_rank: number;
+  /** Best (lowest) bm25 of any row in the session. */
+  session_best_rank: number;
+};
+
 export type FileCursor = {
   indexed_bytes: number;
   file_size: number;
@@ -187,6 +207,70 @@ export const searchIndexDb = {
          LIMIT ?`,
       )
       .all(matchLiteral, limit) as SearchIndexHit[];
+  },
+
+  /**
+   * Filtered, paginated session-grouped search. Every filter runs in SQL next
+   * to the MATCH, so a filter that drops most hits can never starve a page
+   * (unlike a fixed over-fetch + JS post-filter).
+   *
+   * Rows come back ordered by session (best bm25 hit first), then by rank
+   * within the session, capped at `perSessionLimit` rows per session. A
+   * session's rows are therefore contiguous, which lets callers cut pages on
+   * session boundaries with plain LIMIT/OFFSET.
+   *
+   * Filter semantics (each `null`/omitted = no constraint):
+   * - `jsonlPaths`: allowed transcript paths (normalized, as stored). `[]` = nothing.
+   * - `projectPaths.include` / `.exclude`: exact `project_path` sets; exclude wins.
+   * - `roles`: allowed message roles.
+   * - `after` (inclusive) / `before` (exclusive): ISO instants vs message
+   *   `timestamp`; rows without a timestamp are dropped when either is set.
+   */
+  searchSessionMatches(params: SessionMatchSearchParams): SessionMatchRow[] {
+    const db = getConnection();
+    const json = (value: readonly string[] | null | undefined) => (value ? JSON.stringify(value) : null);
+    const include = params.projectPaths?.include;
+    const exclude = params.projectPaths?.exclude;
+    return db
+      .prepare(
+        `WITH hits AS (
+           SELECT rowid AS rid, jsonl_path, seq, bm25(session_message_index) AS rank
+           FROM session_message_index
+           WHERE session_message_index MATCH @match
+             AND (@paths IS NULL OR jsonl_path IN (SELECT value FROM json_each(@paths)))
+             AND (@projectInclude IS NULL OR project_path IN (SELECT value FROM json_each(@projectInclude)))
+             AND (@projectExclude IS NULL OR project_path IS NULL
+                  OR project_path NOT IN (SELECT value FROM json_each(@projectExclude)))
+             AND (@roles IS NULL OR role IN (SELECT value FROM json_each(@roles)))
+             AND (@after IS NULL OR julianday(timestamp) >= julianday(@after))
+             AND (@before IS NULL OR julianday(timestamp) < julianday(@before))
+         ),
+         ranked AS (
+           SELECT rid, jsonl_path, seq, rank,
+                  ROW_NUMBER() OVER (PARTITION BY jsonl_path ORDER BY rank, seq) AS session_rank,
+                  MIN(rank) OVER (PARTITION BY jsonl_path) AS session_best_rank
+           FROM hits
+         )
+         SELECT i.jsonl_path, i.project_path, i.role, i.timestamp, i.message_uuid, i.seq, i.body,
+                r.rank, r.session_rank, r.session_best_rank
+         FROM ranked r
+         JOIN session_message_index i ON i.rowid = r.rid
+         WHERE r.session_rank <= @perSessionLimit
+         ORDER BY r.session_best_rank, r.jsonl_path, r.session_rank
+         LIMIT @limit OFFSET @offset`,
+      )
+      .all({
+        match: params.matchLiteral,
+        paths: json(params.jsonlPaths),
+        projectInclude: json(include),
+        projectExclude: exclude && exclude.length > 0 ? json(exclude) : null,
+        roles: params.roles && params.roles.length > 0 ? json(params.roles) : null,
+        after: params.after ?? null,
+        before: params.before ?? null,
+        perSessionLimit: params.perSessionLimit,
+        limit: params.limit,
+        offset: params.offset ?? 0,
+      }) as SessionMatchRow[];
   },
 
   countIndexedFiles(): number {

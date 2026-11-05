@@ -140,6 +140,30 @@ export const api = {
     if (token) params.set('token', token);
     return `/api/providers/search/sessions?${params.toString()}`;
   },
+  // Unified structured search (SSE, same event contract as above). `searchQuery`
+  // is a SearchQuery from shared/search/query.ts; `cursor` is the previous
+  // page's `done.nextCursor`. The browser's time zone is sent so raw date
+  // tokens (`after:7d`) resolve in the user's zone.
+  /**
+   * @param {object} searchQuery
+   * @param {{ limit?: number, cursor?: string | null }} [options]
+   */
+  searchSessionsUrl: (searchQuery, { limit = 50, cursor = null } = {}) => {
+    const token = localStorage.getItem('auth-token');
+    const params = new URLSearchParams({ sq: JSON.stringify(searchQuery), limit: String(limit) });
+    if (cursor) params.set('cursor', cursor);
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) params.set('tz', tz);
+    } catch {
+      // No Intl zone support — server falls back to UTC.
+    }
+    if (token) params.set('token', token);
+    return `/api/providers/search/sessions?${params.toString()}`;
+  },
+  // Same as searchArchivedSessions, but with a structured SearchQuery.
+  searchArchivedSessionsStructured: (searchQuery) =>
+    authenticatedFetch(`/api/providers/search/archived-sessions?sq=${encodeURIComponent(JSON.stringify(searchQuery))}`),
   createProject: (projectData) =>
     authenticatedFetch('/api/projects/create-project', {
       method: 'POST',

@@ -19,6 +19,13 @@ import type {
 } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
+import {
+  createSearchQuery,
+  isValidTimeZone,
+  normalizeSearchQuery,
+  type SearchQuery,
+} from '../../../shared/search/query.js';
+
 const router = express.Router();
 
 const readPathParam = (value: unknown, name: string): string => {
@@ -359,6 +366,33 @@ const parseSessionSearchQuery = (value: unknown): string => {
   return query;
 };
 
+/**
+ * Structured search input for `/search/sessions`. `sq` (a JSON-encoded
+ * `SearchQuery`, see shared/search/query.ts) wins when present; otherwise the
+ * legacy `q` raw text is searched verbatim (no inline-token parsing, so old
+ * callers see no behavior change).
+ */
+const parseStructuredSearchQuery = (sq: unknown, q: unknown): SearchQuery => {
+  const raw = readOptionalQueryString(sq);
+  if (!raw) {
+    return createSearchQuery({ text: parseSessionSearchQuery(q) });
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    throw new AppError('sq must be a JSON-encoded search query.', {
+      code: 'INVALID_SEARCH_QUERY',
+      statusCode: 400,
+    });
+  }
+
+  const query = normalizeSearchQuery(decoded);
+  query.text = parseSessionSearchQuery(query.text);
+  return query;
+};
+
 const parseSessionSearchLimit = (value: unknown): number => {
   const raw = readOptionalQueryString(value);
   if (!raw) {
@@ -666,14 +700,24 @@ router.get('/search/archived-sessions', asyncHandler(async (req: Request, res: R
   // Content search scoped to archived items. Returns matching sessionIds the
   // sidebar unions with its title/path filter; the SSE stream the active search
   // uses is unnecessary here (synchronous DB read, bounded archive set).
-  const query = parseSessionSearchQuery(req.query.q);
+  // Same unified path as /search/sessions (forced to `archived: 'only'`);
+  // accepts `sq` as well as legacy `q`.
+  const query = parseStructuredSearchQuery(req.query.sq, req.query.q);
   const sessionIds = sessionConversationsSearchService.searchArchivedSessionIds(query, 200);
   res.json(createApiSuccessResponse({ sessionIds }));
 }));
 
 router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) => {
-  const query = parseSessionSearchQuery(req.query.q);
+  // SSE contract (unchanged for `q` callers): `result` per project bucket,
+  // optional `progress`, then `done` — whose data now carries `nextCursor`
+  // (null when exhausted). Pass it back as `cursor` to load the next page.
+  const query = parseStructuredSearchQuery(req.query.sq, req.query.q);
   const limit = parseSessionSearchLimit(req.query.limit);
+  const cursor = readOptionalQueryString(req.query.cursor) ?? null;
+  // IANA zone for raw date tokens in `sq` (`after:7d`); clients that send ISO
+  // instants don't need it. Unknown zones fall back to UTC.
+  const tz = readOptionalQueryString(req.query.tz);
+  const timeZone = tz && isValidTimeZone(tz) ? tz : null;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -690,11 +734,12 @@ router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) 
   });
 
   try {
-    await sessionConversationsSearchService.search({
-      query,
+    const { nextCursor } = await sessionConversationsSearchService.searchSessions(query, {
       limit,
+      cursor,
+      timeZone,
       signal: abortController.signal,
-      onProgress: ({ projectResult, totalMatches, scannedProjects, totalProjects }) => {
+      onProjectResult: ({ projectResult, totalMatches, scannedProjects, totalProjects }) => {
         if (closed) {
           return;
         }
@@ -709,7 +754,7 @@ router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) 
     });
 
     if (!closed) {
-      res.write('event: done\ndata: {}\n\n');
+      res.write(`event: done\ndata: ${JSON.stringify({ nextCursor })}\n\n`);
     }
   } catch (error) {
     console.error('Error searching conversations:', error);

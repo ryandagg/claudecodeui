@@ -1,8 +1,11 @@
+import os from 'node:os';
 import path from 'node:path';
 
 import { projectsDb, searchIndexDb, sessionsDb, toFtsMatchLiteral } from '@/modules/database/index.js';
-import type { SearchIndexHit } from '@/modules/database/index.js';
+import type { SessionMatchRow } from '@/modules/database/index.js';
 import { normalizeIndexPath } from '@/modules/providers/services/session-index.service.js';
+
+import { createSearchQuery, resolveSearchDate, type SearchQuery } from '../../../../shared/search/query.js';
 
 type SearchableProvider = 'claude' | 'codex' | 'gemini';
 
@@ -54,6 +57,28 @@ type SearchSessionConversationsInput = {
   onProgress?: (update: SessionConversationSearchProgressUpdate) => void;
 };
 
+export type SearchSessionsOptions = {
+  /** Max matches per page (sessions are never split across pages, so a page may run slightly over). */
+  limit?: number;
+  /** Opaque cursor from a previous page's `nextCursor`. */
+  cursor?: string | null;
+  perSessionLimit?: number;
+  signal?: AbortSignal | null;
+  onProjectResult?: ((update: SessionConversationSearchProgressUpdate) => void) | null;
+  /** Clock for relative date tokens (`after:7d`). */
+  now?: Date;
+  /** IANA zone for date-only / relative / zoneless date tokens. Default UTC. */
+  timeZone?: string | null;
+};
+
+export type SearchSessionsResult = {
+  results: ProjectConversationResult[];
+  totalMatches: number;
+  query: string;
+  /** Cursor for the next page, or null when exhausted. */
+  nextCursor: string | null;
+};
+
 type SessionRepositoryRow = ReturnType<typeof sessionsDb.getAllSessions>[number];
 
 const SUPPORTED_PROVIDERS = new Set<SearchableProvider>(['claude', 'codex', 'gemini']);
@@ -61,16 +86,7 @@ const MAX_MATCHES_PER_SESSION = 2;
 const MIN_QUERY_LENGTH = 3;
 const UNKNOWN_PROJECT_KEY = '__unknown_project__';
 const SNIPPET_LENGTH = 150;
-
-/**
- * The trigram index MATCH can only return whole indexed rows, not per-session
- * counts, so more rows than `limit` are pulled and then grouped/capped in
- * memory. This multiplier keeps enough candidates to fill `limit` sessions
- * even when several matches land in the same session (capped per session) or
- * in sessions that are filtered out (archived project).
- */
-const INDEX_FETCH_MULTIPLIER = 20;
-const INDEX_FETCH_CAP = 5000;
+const MAX_PAGE_LIMIT = 200;
 
 function makeProjectKey(projectPath: string | null): string {
   const normalized = typeof projectPath === 'string' ? projectPath.trim() : '';
@@ -144,92 +160,163 @@ function* iterateIndexedSessions(): Generator<ClassifiedSession> {
 }
 
 /**
- * Shared FTS query. A malformed MATCH expression (should not happen after
- * escaping) must not take down the SSE stream or the archive search; surface as
- * "no results" instead.
+ * Whether a session passes the `archived` mode. See `SearchArchived` in
+ * shared/search/query.ts: an item is archived when the session row is, or its
+ * whole project is.
  */
-function queryIndex(safeQuery: string, safeLimit: number): SearchIndexHit[] {
-  const fetchLimit = Math.min(INDEX_FETCH_CAP, safeLimit * INDEX_FETCH_MULTIPLIER);
+function passesArchivedMode(mode: SearchQuery['archived'], session: ClassifiedSession): boolean {
+  const isArchivedItem = session.row.isArchived === 1 || session.isProjectArchived;
+  switch (mode) {
+    case 'auto':
+      return !session.isProjectArchived;
+    case 'exclude':
+      return !isArchivedItem;
+    case 'include':
+      return true;
+    case 'only':
+      return isArchivedItem;
+  }
+}
+
+function expandHome(value: string): string {
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+/**
+ * Resolves `project:` tokens to concrete `project_path`s. A token matches a
+ * project by exact path (with `~` expansion and trailing-slash tolerance), by
+ * directory basename, or by custom display name — case-insensitively for the
+ * names. Unresolvable include tokens resolve to nothing (so an include-only
+ * query for an unknown project correctly returns no results).
+ */
+function resolveProjectTokens(tokens: string[], projectPaths: Iterable<string>): string[] {
+  if (tokens.length === 0) return [];
+  const wanted = tokens.map((token) => {
+    const expanded = expandHome(token.trim());
+    return {
+      asPath: expanded.length > 1 ? expanded.replace(/\/+$/, '') : expanded,
+      lower: token.trim().toLowerCase(),
+    };
+  });
+  const matched: string[] = [];
+  for (const projectPath of projectPaths) {
+    const basename = path.basename(projectPath).toLowerCase();
+    const customName = projectsDb.getProjectPath(projectPath)?.custom_project_name?.trim().toLowerCase() ?? '';
+    const hit = wanted.some(
+      (w) => w.asPath === projectPath || w.lower === basename || (customName !== '' && w.lower === customName),
+    );
+    if (hit) matched.push(projectPath);
+  }
+  return matched;
+}
+
+type SessionFilterPlan = {
+  /** Allowed transcript path → session row. */
+  sessionsByPath: Map<string, SearchableSessionRow>;
+  projectInclude: string[] | null;
+  projectExclude: string[];
+};
+
+/**
+ * Session-level filters that the message index cannot evaluate on its own
+ * (archive state lives on `sessions`/`projects`, provider and favorites on
+ * `sessions`) are resolved here into an allowed transcript-path set, which the
+ * repository applies in SQL next to MATCH. Project tokens become exact
+ * `project_path` sets, also applied in SQL.
+ *
+ * Not yet applied here (owned by later issues): `paths` globs (#15),
+ * `running` (#16), `in:title` (#14), match options (#17/#18).
+ */
+function planSessionFilters(query: SearchQuery): SessionFilterPlan {
+  const sessionsByPath = new Map<string, SearchableSessionRow>();
+  const projectPaths = new Set<string>();
+  const providers = new Set<string>(query.providers);
+
+  for (const session of iterateIndexedSessions()) {
+    if (!passesArchivedMode(query.archived, session)) continue;
+    if (providers.size > 0 && !providers.has(session.row.provider)) continue;
+    if (query.favorite && !session.row.starred_at) continue;
+    sessionsByPath.set(session.path, session.row);
+    const projectPath = typeof session.row.project_path === 'string' ? session.row.project_path.trim() : '';
+    if (projectPath) projectPaths.add(projectPath);
+  }
+
+  return {
+    sessionsByPath,
+    projectInclude: query.projects.include.length > 0
+      ? resolveProjectTokens(query.projects.include, projectPaths)
+      : null,
+    projectExclude: resolveProjectTokens(query.projects.exclude, projectPaths),
+  };
+}
+
+function decodeCursor(cursor: string | null | undefined): number {
+  if (!cursor) return 0;
+  const offset = Number.parseInt(cursor, 10);
+  return Number.isFinite(offset) && offset > 0 && String(offset) === cursor ? offset : 0;
+}
+
+/**
+ * Runs the filtered index query for one page. Rows are session-contiguous, so
+ * the page is cut at the first session boundary at or after `limit` matches —
+ * a session's matches never straddle two pages. One extra row beyond the
+ * maximum possible page size tells us whether another page exists.
+ *
+ * A malformed MATCH expression (should not happen after escaping) must not
+ * take down the SSE stream or the archive search; it surfaces as "no results".
+ */
+function queryPage(
+  text: string,
+  query: SearchQuery,
+  plan: SessionFilterPlan,
+  limit: number,
+  perSessionLimit: number,
+  offset: number,
+  dateOptions: { now: Date; timeZone?: string },
+): { rows: SessionMatchRow[]; nextOffset: number | null } {
+  let fetched: SessionMatchRow[];
   try {
-    return searchIndexDb.search(toFtsMatchLiteral(safeQuery), fetchLimit);
+    fetched = searchIndexDb.searchSessionMatches({
+      matchLiteral: toFtsMatchLiteral(text),
+      jsonlPaths: [...plan.sessionsByPath.keys()],
+      projectPaths: { include: plan.projectInclude, exclude: plan.projectExclude },
+      roles: query.roles,
+      after: resolveSearchDate(query.after, dateOptions),
+      before: resolveSearchDate(query.before, dateOptions),
+      perSessionLimit,
+      // Room for: a partial leading session (snapped past), a full page, the
+      // tail of the last session, and one row to detect another page.
+      limit: limit + 2 * perSessionLimit + 1,
+      offset,
+    });
   } catch (error) {
     console.error('Session index search failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-    return [];
-  }
-}
-
-/**
- * Transcript-path → session row for every *visible* session: archived sessions
- * stay (hidden from the sidebar list, but their history is still searchable),
- * while sessions under an archived *project* are excluded — reachable via the
- * archive view instead.
- */
-function buildVisibleSessionsByPath(): Map<string, SearchableSessionRow> {
-  const byPath = new Map<string, SearchableSessionRow>();
-  for (const { path, row, isProjectArchived } of iterateIndexedSessions()) {
-    if (isProjectArchived) {
-      continue;
-    }
-    byPath.set(path, row);
-  }
-  return byPath;
-}
-
-/**
- * Transcript-path → sessionId for every *archived* item — the mirror image of
- * {@link buildVisibleSessionsByPath}, keeping what it drops. A session counts as
- * archived when its own row is archived, or when its whole project is; both are
- * surfaced in the sidebar's archive view and must be reachable by content there.
- */
-function buildArchivedSessionIdsByPath(): Map<string, string> {
-  const byPath = new Map<string, string>();
-  for (const { path, row, isProjectArchived } of iterateIndexedSessions()) {
-    if (row.isArchived !== 1 && !isProjectArchived) {
-      continue;
-    }
-    byPath.set(path, row.session_id);
-  }
-  return byPath;
-}
-
-/**
- * Runs the same FTS index as {@link searchConversations}, but scoped to
- * archived items, and returns the distinct sessionIds whose transcript content
- * matches. The archive view unions these with its metadata (title/path) filter
- * so a string copied out of an archived conversation is findable there too.
- */
-function searchArchivedConversationSessionIds(query: string, limit = 200): string[] {
-  const safeQuery = typeof query === 'string' ? query.trim() : '';
-  const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 200, 1000));
-
-  if (safeQuery.length < MIN_QUERY_LENGTH) {
-    return [];
+    return { rows: [], nextOffset: null };
   }
 
-  const archivedByPath = buildArchivedSessionIdsByPath();
-  if (archivedByPath.size === 0) {
-    return [];
+  // A cursor that doesn't land on a session boundary (only possible if it was
+  // hand-edited) snaps forward to the next session start instead of beginning
+  // the page mid-session.
+  let skipped = 0;
+  while (skipped < fetched.length && fetched[skipped].session_rank !== 1) {
+    skipped += 1;
   }
 
-  const hits = queryIndex(safeQuery, safeLimit);
-
-  const seen = new Set<string>();
-  const sessionIds: string[] = [];
-  for (const hit of hits) {
-    if (sessionIds.length >= safeLimit) {
-      break;
-    }
-    const sessionId = archivedByPath.get(normalizeIndexPath(hit.jsonl_path));
-    if (!sessionId || seen.has(sessionId)) {
-      continue;
-    }
-    seen.add(sessionId);
-    sessionIds.push(sessionId);
+  let consumed = 0;
+  while (skipped + consumed < fetched.length) {
+    const row = fetched[skipped + consumed];
+    if (consumed >= limit && row.session_rank === 1) break;
+    consumed += 1;
   }
-
-  return sessionIds;
+  const end = skipped + consumed;
+  return {
+    rows: fetched.slice(skipped, end),
+    nextOffset: end < fetched.length ? offset + end : null,
+  };
 }
 
 type ProjectMetadata = { projectId: string | null; projectDisplayName: string };
@@ -312,62 +399,70 @@ type ProjectBucket = {
 };
 
 /**
- * Core search: query the FTS index, map hits back to visible session rows,
- * group by project, cap per session and overall, and stream project buckets as
- * they complete. Preserves the SSE contract of the previous ripgrep-based
- * implementation (same result/progress shapes, project grouping, and limits).
+ * Unified session search: one filtered index query (filters in SQL, see
+ * {@link planSessionFilters}), mapped back to session rows, grouped by project
+ * in rank order, and streamed one project bucket at a time. Used by the
+ * active-conversation SSE search and the archive view alike (the latter is
+ * just `archived: 'only'`).
+ *
+ * Pagination: pass the previous page's `nextCursor` to continue. Project
+ * buckets can repeat across pages (a later session in an already-seen
+ * project); sessions never do.
  */
-export async function searchConversations(
-  query: string,
-  limit = 50,
-  onProjectResult: ((update: SessionConversationSearchProgressUpdate) => void) | null = null,
-  signal: AbortSignal | null = null,
-): Promise<{ results: ProjectConversationResult[]; totalMatches: number; query: string }> {
-  const safeQuery = typeof query === 'string' ? query.trim() : '';
-  const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
+export async function searchSessions(
+  query: SearchQuery,
+  options: SearchSessionsOptions = {},
+): Promise<SearchSessionsResult> {
+  return searchSessionsSync(query, options);
+}
+
+/** Synchronous core of {@link searchSessions} (better-sqlite3 is synchronous). */
+function searchSessionsSync(query: SearchQuery, options: SearchSessionsOptions = {}): SearchSessionsResult {
+  const text = typeof query.text === 'string' ? query.text.trim() : '';
+  const rawLimit = options.limit ?? 50;
+  const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 50, MAX_PAGE_LIMIT));
+  const perSessionLimit = Math.max(1, options.perSessionLimit ?? MAX_MATCHES_PER_SESSION);
+  const signal = options.signal ?? null;
+  const empty: SearchSessionsResult = { results: [], totalMatches: 0, query: text, nextCursor: null };
 
   const isAborted = () => signal?.aborted === true;
-
-  if (safeQuery.length < MIN_QUERY_LENGTH || isAborted()) {
-    return { results: [], totalMatches: 0, query: safeQuery };
+  if (text.length < MIN_QUERY_LENGTH || isAborted()) {
+    return empty;
   }
 
-  const visibleSessionsByPath = buildVisibleSessionsByPath();
-  if (visibleSessionsByPath.size === 0) {
-    return { results: [], totalMatches: 0, query: safeQuery };
+  const plan = planSessionFilters(query);
+  if (plan.sessionsByPath.size === 0 || (plan.projectInclude !== null && plan.projectInclude.length === 0)) {
+    return empty;
   }
 
-  const hits = queryIndex(safeQuery, safeLimit);
+  const offset = decodeCursor(options.cursor);
+  const { rows, nextOffset } = queryPage(
+    text,
+    query,
+    plan,
+    limit,
+    perSessionLimit,
+    offset,
+    { now: options.now ?? new Date(), timeZone: options.timeZone ?? undefined },
+  );
 
-  if (isAborted() || hits.length === 0) {
-    return { results: [], totalMatches: 0, query: safeQuery };
+  if (isAborted() || rows.length === 0) {
+    return empty;
   }
 
-  // Group hits into project buckets in bm25 rank order, capping matches per
-  // session and stopping once `safeLimit` total matches are collected.
   const projectMetadataCache = new Map<string, ProjectMetadata>();
   const bucketByKey = new Map<string, ProjectBucket>();
   const bucketOrder: ProjectBucket[] = [];
   const resultBySessionId = new Map<string, SessionConversationResult>();
-  const matchCountBySessionId = new Map<string, number>();
   let totalMatches = 0;
 
-  for (const hit of hits) {
-    if (totalMatches >= safeLimit) {
-      break;
-    }
-
-    const session = visibleSessionsByPath.get(normalizeIndexPath(hit.jsonl_path));
+  for (const hit of rows) {
+    const session = plan.sessionsByPath.get(normalizeIndexPath(hit.jsonl_path));
     if (!session) {
       continue;
     }
 
     const sessionId = session.session_id;
-    const currentCount = matchCountBySessionId.get(sessionId) ?? 0;
-    if (currentCount >= MAX_MATCHES_PER_SESSION) {
-      continue;
-    }
-
     const projectKey = makeProjectKey(session.project_path);
     let bucket = bucketByKey.get(projectKey);
     if (!bucket) {
@@ -396,7 +491,7 @@ export async function searchConversations(
       bucket.sessions.push(sessionResult);
     }
 
-    const { snippet, highlights } = buildSnippet(hit.body, safeQuery);
+    const { snippet, highlights } = buildSnippet(hit.body, text);
     sessionResult.matches.push({
       role: hit.role,
       snippet,
@@ -405,12 +500,9 @@ export async function searchConversations(
       provider: session.provider,
       messageUuid: hit.message_uuid,
     });
-    matchCountBySessionId.set(sessionId, currentCount + 1);
     totalMatches += 1;
   }
 
-  // Drop empty buckets (possible if every hit for a bucket was filtered), then
-  // stream each completed project bucket, mirroring the previous progressive UI.
   const results = bucketOrder.filter((bucket) => bucket.sessions.length > 0);
   const totalProjects = results.length;
   const finalResults: ProjectConversationResult[] = [];
@@ -425,7 +517,7 @@ export async function searchConversations(
     };
     finalResults.push(projectResult);
     scannedProjects += 1;
-    onProjectResult?.({
+    options.onProjectResult?.({
       projectResult,
       totalMatches,
       scannedProjects,
@@ -433,7 +525,46 @@ export async function searchConversations(
     });
   }
 
-  return { results: finalResults, totalMatches, query: safeQuery };
+  return {
+    results: finalResults,
+    totalMatches,
+    query: text,
+    nextCursor: nextOffset === null ? null : String(nextOffset),
+  };
+}
+
+/**
+ * Legacy entry point: raw text, first page, default (`auto`) archive handling.
+ * Kept so existing callers and the `q=` SSE contract are unchanged.
+ */
+export async function searchConversations(
+  query: string,
+  limit = 50,
+  onProjectResult: ((update: SessionConversationSearchProgressUpdate) => void) | null = null,
+  signal: AbortSignal | null = null,
+): Promise<{ results: ProjectConversationResult[]; totalMatches: number; query: string }> {
+  const { results, totalMatches, query: text } = await searchSessions(
+    createSearchQuery({ text: typeof query === 'string' ? query : '' }),
+    { limit, onProjectResult, signal },
+  );
+  return { results, totalMatches, query: text };
+}
+
+/**
+ * Archive-view content search: distinct sessionIds of archived items whose
+ * transcript matches. Same path as {@link searchSessions} with
+ * `archived: 'only'` and one match per session.
+ */
+function searchArchivedConversationSessionIds(query: string | SearchQuery, limit = 200): string[] {
+  const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 200, MAX_PAGE_LIMIT));
+  const structured = typeof query === 'string' || !query
+    ? createSearchQuery({ text: typeof query === 'string' ? query : '' })
+    : query;
+  const { results } = searchSessionsSync(
+    { ...structured, archived: 'only' },
+    { limit: safeLimit, perSessionLimit: 1 },
+  );
+  return results.flatMap((project) => project.sessions.map((session) => session.sessionId));
 }
 
 /**
@@ -461,7 +592,12 @@ export const sessionConversationsSearchService = {
    * query. Synchronous (better-sqlite3) and small by nature, so the route does
    * not need the SSE streaming the active-conversation search uses.
    */
-  searchArchivedSessionIds(query: string, limit = 200): string[] {
+  searchArchivedSessionIds(query: string | SearchQuery, limit = 200): string[] {
     return searchArchivedConversationSessionIds(query, limit);
+  },
+
+  /** Structured, paginated search (the unified path). */
+  searchSessions(query: SearchQuery, options: SearchSessionsOptions = {}): Promise<SearchSessionsResult> {
+    return searchSessions(query, options);
   },
 };

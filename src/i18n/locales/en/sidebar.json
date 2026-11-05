@@ -128,7 +128,8 @@
     "matches_one": "{{count}} match",
     "matches_other": "{{count}} matches",
     "projectsScanned_one": "{{count}} project scanned",
-    "projectsScanned_other": "{{count}} projects scanned"
+    "projectsScanned_other": "{{count}} projects scanned",
+    "loadMore": "Load more results"
   },
   "deleteConfirmation": {
     "deleteProject": "Remove Project",

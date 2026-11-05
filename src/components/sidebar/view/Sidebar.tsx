@@ -59,6 +59,9 @@ function Sidebar({
     conversationResults,
     isSearching,
     searchProgress,
+    hasMoreConversationResults,
+    isLoadingMoreConversations,
+    loadMoreConversationResults,
     clearConversationResults,
     runningSessionsCount,
     deletingProjects,
@@ -240,6 +243,9 @@ function Sidebar({
             conversationResults={conversationResults}
             isSearching={isSearching}
             searchProgress={searchProgress}
+            hasMoreConversationResults={hasMoreConversationResults}
+            isLoadingMoreConversations={isLoadingMoreConversations}
+            onLoadMoreConversationResults={loadMoreConversationResults}
             onRestoreArchivedProject={restoreArchivedProject}
             onArchivedSessionClick={openArchivedSession}
             onRestoreArchivedSession={restoreArchivedSession}

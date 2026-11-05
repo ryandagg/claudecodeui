@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 
 import { api } from '../../../utils/api';
+import { createSearchQuery, parseSearchQuery, type SearchQuery } from '../../../../shared/search/query';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
 import { useSettings } from '../../../contexts/SettingsContext';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
@@ -22,6 +23,7 @@ import {
   getAllSessions,
   getSessionDate,
   HIDDEN_SESSION_STORAGE_KEY,
+  mergeConversationResultPages,
   parseHiddenSessionPatterns,
   parseProjectSortOrder,
   PROJECT_SORT_ORDER_KEY,
@@ -66,6 +68,89 @@ export type ConversationSearchResults = {
   totalMatches: number;
   query: string;
 };
+
+/** Feature flag for in-progress Search Everywhere UX (epic #30); default OFF. */
+const SEARCH_EVERYWHERE_FLAG_KEY = 'cloudcli.flags.searchEverywhere';
+
+const isSearchEverywhereFlagOn = (): boolean => {
+  try {
+    const value = localStorage.getItem(SEARCH_EVERYWHERE_FLAG_KEY);
+    return value === '1' || value === 'true';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Sidebar search-box text → structured query. Inline filter tokens
+ * (`project:`, `-path:`, …) are only honored behind the Search Everywhere
+ * flag; with it off the raw text is searched verbatim, exactly as before.
+ */
+const toSidebarSearchQuery = (raw: string): SearchQuery =>
+  isSearchEverywhereFlagOn() ? parseSearchQuery(raw) : createSearchQuery({ text: raw });
+
+type SearchResultEvent = {
+  projectResult: ConversationProjectResult;
+  totalMatches: number;
+  scannedProjects: number;
+  totalProjects: number;
+};
+
+/**
+ * Opens one SSE page of `/api/providers/search/sessions` and dispatches its
+ * events. Every handler is skipped once `isStale()` (a newer search started),
+ * and the stream is closed.
+ */
+function streamSearchPage(
+  url: string,
+  isStale: () => boolean,
+  handlers: {
+    onResult: (data: SearchResultEvent) => void;
+    onProgress?: (data: Omit<SearchResultEvent, 'projectResult'>) => void;
+    onDone: (nextCursor: string | null) => void;
+    onError: () => void;
+  },
+): EventSource {
+  const es = new EventSource(url);
+  const guard = <E extends Event>(fn: (evt: E) => void) => (evt: E) => {
+    if (isStale()) {
+      es.close();
+      return;
+    }
+    fn(evt);
+  };
+
+  es.addEventListener('result', guard((evt: MessageEvent) => {
+    try {
+      handlers.onResult(JSON.parse(evt.data) as SearchResultEvent);
+    } catch {
+      // Ignore malformed SSE data
+    }
+  }));
+  es.addEventListener('progress', guard((evt: MessageEvent) => {
+    try {
+      handlers.onProgress?.(JSON.parse(evt.data) as Omit<SearchResultEvent, 'projectResult'>);
+    } catch {
+      // Ignore malformed SSE data
+    }
+  }));
+  es.addEventListener('done', guard((evt: MessageEvent) => {
+    es.close();
+    let nextCursor: string | null = null;
+    try {
+      const data = JSON.parse(evt.data) as { nextCursor?: unknown };
+      nextCursor = typeof data.nextCursor === 'string' ? data.nextCursor : null;
+    } catch {
+      // Older servers send `{}`; treat as exhausted.
+    }
+    handlers.onDone(nextCursor);
+  }));
+  es.addEventListener('error', guard(() => {
+    es.close();
+    handlers.onError();
+  }));
+  return es;
+}
 
 export type SearchProgress = {
   scannedProjects: number;
@@ -185,6 +270,9 @@ export function useSidebarController({
   const [conversationResults, setConversationResults] = useState<ConversationSearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
+  // Cursor for the next page of conversation-search results (null = exhausted).
+  const [conversationNextCursor, setConversationNextCursor] = useState<string | null>(null);
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProjectListItem[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessionListItem[]>([]);
   const [isArchivedSessionsLoading, setIsArchivedSessionsLoading] = useState(false);
@@ -200,6 +288,9 @@ export function useSidebarController({
   const searchSeqRef = useRef(0);
   const archivedSearchSeqRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const loadMoreSourceRef = useRef<EventSource | null>(null);
+  // The structured query behind the current results, reused for "load more".
+  const conversationSearchQueryRef = useRef<SearchQuery | null>(null);
   const starToggleSequenceByProjectRef = useRef<Map<string, number>>(new Map());
   const migrationStartedRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
@@ -367,17 +458,27 @@ export function useSidebarController({
     };
   }, [searchFilter]);
 
-  // Debounced conversation search with SSE streaming
-  useEffect(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+  const closeConversationStreams = useCallback(() => {
+    for (const ref of [eventSourceRef, loadMoreSourceRef]) {
+      if (ref.current) {
+        ref.current.close();
+        ref.current = null;
+      }
     }
+  }, []);
 
-    const query = debouncedSearchQuery;
+  // Debounced conversation search with SSE streaming (first page).
+  useEffect(() => {
+    closeConversationStreams();
+    setConversationNextCursor(null);
+    setIsLoadingMoreConversations(false);
+
+    const searchQuery = toSidebarSearchQuery(debouncedSearchQuery);
+    const query = searchQuery.text.trim();
     // Trigram FTS needs ≥3 chars; shorter queries can't match the index.
     if (searchMode !== 'conversations' || query.length < 3) {
       searchSeqRef.current += 1;
+      conversationSearchQueryRef.current = null;
       setConversationResults(null);
       setSearchProgress(null);
       setIsSearching(false);
@@ -386,76 +487,78 @@ export function useSidebarController({
 
     setIsSearching(true);
     const seq = ++searchSeqRef.current;
+    conversationSearchQueryRef.current = searchQuery;
 
-    if (seq !== searchSeqRef.current) {
+    const accumulated: ConversationProjectResult[] = [];
+    const finish = () => {
+      eventSourceRef.current = null;
+      setIsSearching(false);
+      setSearchProgress(null);
+      if (accumulated.length === 0) {
+        setConversationResults({ results: [], totalMatches: 0, query });
+      }
+    };
+
+    eventSourceRef.current = streamSearchPage(
+      api.searchSessionsUrl(searchQuery),
+      () => seq !== searchSeqRef.current,
+      {
+        onResult: (data) => {
+          accumulated.push(data.projectResult);
+          setConversationResults({ results: [...accumulated], totalMatches: data.totalMatches, query });
+          setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
+        },
+        onProgress: (data) => {
+          setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
+        },
+        onDone: (nextCursor) => {
+          setConversationNextCursor(nextCursor);
+          finish();
+        },
+        onError: finish,
+      },
+    );
+
+    return closeConversationStreams;
+  }, [debouncedSearchQuery, searchMode, closeConversationStreams]);
+
+  // "Load more": fetch the next page for the current query and merge it in.
+  // Stale-guarded by the same sequence as the first page, so typing a new query
+  // drops any in-flight page.
+  const loadMoreConversationResults = useCallback(() => {
+    const searchQuery = conversationSearchQueryRef.current;
+    if (!searchQuery || !conversationNextCursor || loadMoreSourceRef.current) {
       return;
     }
 
-    const url = api.searchConversationsUrl(query);
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
+    const seq = searchSeqRef.current;
+    const page: ConversationProjectResult[] = [];
+    setIsLoadingMoreConversations(true);
 
-    const accumulated: ConversationProjectResult[] = [];
-    let totalMatches = 0;
-
-    es.addEventListener('result', (evt) => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      try {
-        const data = JSON.parse(evt.data) as {
-          projectResult: ConversationProjectResult;
-          totalMatches: number;
-          scannedProjects: number;
-          totalProjects: number;
-        };
-        accumulated.push(data.projectResult);
-        totalMatches = data.totalMatches;
-        setConversationResults({ results: [...accumulated], totalMatches, query });
-        setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
-      } catch {
-        // Ignore malformed SSE data
-      }
-    });
-
-    es.addEventListener('progress', (evt) => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      try {
-        const data = JSON.parse(evt.data) as { totalMatches: number; scannedProjects: number; totalProjects: number };
-        totalMatches = data.totalMatches;
-        setSearchProgress({ scannedProjects: data.scannedProjects, totalProjects: data.totalProjects });
-      } catch {
-        // Ignore malformed SSE data
-      }
-    });
-
-    es.addEventListener('done', () => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      es.close();
-      eventSourceRef.current = null;
-      setIsSearching(false);
-      setSearchProgress(null);
-      if (accumulated.length === 0) {
-        setConversationResults({ results: [], totalMatches: 0, query });
-      }
-    });
-
-    es.addEventListener('error', () => {
-      if (seq !== searchSeqRef.current) { es.close(); return; }
-      es.close();
-      eventSourceRef.current = null;
-      setIsSearching(false);
-      setSearchProgress(null);
-      if (accumulated.length === 0) {
-        setConversationResults({ results: [], totalMatches: 0, query });
-      }
-    });
-
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
+    const finish = () => {
+      loadMoreSourceRef.current = null;
+      setIsLoadingMoreConversations(false);
     };
-  }, [debouncedSearchQuery, searchMode]);
+
+    loadMoreSourceRef.current = streamSearchPage(
+      api.searchSessionsUrl(searchQuery, { cursor: conversationNextCursor }),
+      () => seq !== searchSeqRef.current,
+      {
+        onResult: (data) => {
+          page.push(data.projectResult);
+        },
+        onDone: (nextCursor) => {
+          setConversationResults((previous) => {
+            const pageResults = { results: page, totalMatches: 0, query: previous?.query ?? searchQuery.text.trim() };
+            return previous ? mergeConversationResultPages(previous, pageResults) : null;
+          });
+          setConversationNextCursor(nextCursor);
+          finish();
+        },
+        onError: finish,
+      },
+    );
+  }, [conversationNextCursor]);
 
   // Archive-only content search. Mirrors the trigram floor and debounce of the
   // conversation SSE search above, but hits a plain JSON endpoint (the archive
@@ -474,7 +577,7 @@ export function useSidebarController({
 
     void (async () => {
       try {
-        const response = await api.searchArchivedSessions(query);
+        const response = await api.searchArchivedSessionsStructured(toSidebarSearchQuery(query));
         if (seq !== archivedSearchSeqRef.current) {
           return;
         }
@@ -1233,16 +1336,18 @@ export function useSidebarController({
     conversationResults,
     isSearching,
     searchProgress,
+    hasMoreConversationResults: conversationNextCursor !== null,
+    isLoadingMoreConversations,
+    loadMoreConversationResults,
     clearConversationResults: useCallback(() => {
       searchSeqRef.current += 1;
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
+      closeConversationStreams();
+      setConversationNextCursor(null);
+      setIsLoadingMoreConversations(false);
       setIsSearching(false);
       setSearchProgress(null);
       setConversationResults(null);
-    }, []),
+    }, [closeConversationStreams]),
     setSearchFilter,
     setDeleteConfirmation,
     setSessionDeleteConfirmation,

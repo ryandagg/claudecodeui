@@ -229,6 +229,10 @@ type SidebarContentProps = {
   conversationResults: ConversationSearchResults | null;
   isSearching: boolean;
   searchProgress: SearchProgress | null;
+  /** A further page of conversation-search results exists. */
+  hasMoreConversationResults?: boolean;
+  isLoadingMoreConversations?: boolean;
+  onLoadMoreConversationResults?: () => void;
   onRestoreArchivedProject: (projectId: string) => void;
   onArchivedSessionClick: (session: ArchivedSessionListItem) => void;
   onRestoreArchivedSession: (sessionId: string) => void;
@@ -264,6 +268,9 @@ export default function SidebarContent({
   conversationResults,
   isSearching,
   searchProgress,
+  hasMoreConversationResults = false,
+  isLoadingMoreConversations = false,
+  onLoadMoreConversationResults,
   onRestoreArchivedProject,
   onArchivedSessionClick,
   onRestoreArchivedSession,
@@ -395,6 +402,20 @@ export default function SidebarContent({
                   })}
                 </div>
               ))}
+              {hasMoreConversationResults && !isSearching && onLoadMoreConversationResults && (
+                <button
+                  type="button"
+                  onClick={onLoadMoreConversationResults}
+                  disabled={isLoadingMoreConversations}
+                  data-testid="conversation-search-load-more"
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
+                >
+                  {isLoadingMoreConversations && (
+                    <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-muted-foreground/40 border-t-primary" />
+                  )}
+                  {t('search.loadMore', 'Load more results')}
+                </button>
+              )}
             </div>
           ) : null
         ) : searchMode === 'running' ? (

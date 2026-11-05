@@ -225,3 +225,46 @@ export const normalizeProjectForSettings = (project: Project): SettingsProject =
         : fallbackPath,
   };
 };
+
+// ---------------------------------------------------------------------------
+// Conversation-search result pages
+// ---------------------------------------------------------------------------
+
+type PagedSearchSession = { sessionId: string; matches: readonly unknown[] };
+type PagedSearchProject<S extends PagedSearchSession> = { projectName: string; sessions: S[] };
+type PagedSearchResults<P> = { results: P[]; totalMatches: number; query: string };
+
+/**
+ * Appends one "load more" page to the accumulated conversation-search results.
+ * Sessions are never split across pages server-side, but a later session can
+ * belong to a project bucket already shown — those are appended into the
+ * existing bucket (keyed by `projectName`, the server's stable project key)
+ * instead of rendering the project twice. Duplicate sessions are ignored
+ * defensively. Pure; returns new objects.
+ */
+export function mergeConversationResultPages<
+  S extends PagedSearchSession,
+  P extends PagedSearchProject<S>,
+>(previous: PagedSearchResults<P>, page: PagedSearchResults<P>): PagedSearchResults<P> {
+  const results = previous.results.map((project) => ({ ...project, sessions: [...project.sessions] }));
+  const byName = new Map(results.map((project) => [project.projectName, project]));
+  const seenSessions = new Set(results.flatMap((project) => project.sessions.map((s) => s.sessionId)));
+  let added = 0;
+
+  for (const project of page.results) {
+    const fresh = project.sessions.filter((session) => !seenSessions.has(session.sessionId));
+    if (fresh.length === 0) continue;
+    for (const session of fresh) seenSessions.add(session.sessionId);
+    added += fresh.reduce((sum, session) => sum + session.matches.length, 0);
+    const existing = byName.get(project.projectName);
+    if (existing) {
+      existing.sessions.push(...fresh);
+    } else {
+      const copy = { ...project, sessions: fresh };
+      results.push(copy);
+      byName.set(copy.projectName, copy);
+    }
+  }
+
+  return { results, totalMatches: previous.totalMatches + added, query: previous.query };
+}

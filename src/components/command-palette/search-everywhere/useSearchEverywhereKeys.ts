@@ -21,6 +21,8 @@ type Handlers = {
   onToggle: () => void;
   /** Double-Shift or a per-tab shortcut: open (or switch) to `tab`. */
   onOpenTab: (tab: SearchTabId) => void;
+  /** Double-Shift while the dialog is open: widen the scope (#16). */
+  onWiden?: () => void;
 };
 
 /**
@@ -64,7 +66,10 @@ export function useSearchEverywhereTriggers(
       const fired = feed({ type: 'keyup', key: detectorKey(e), timeStamp: e.timeStamp });
       if (!fired) return;
       const inDialog = e.target instanceof Element && e.target.closest('[data-search-everywhere]');
-      if (inDialog) return; // already open; #16 makes this "widen scope"
+      if (inDialog) {
+        handlersRef.current.onWiden?.();
+        return;
+      }
       if (isTypingTarget(e.target)) return;
       handlersRef.current.onOpenTab('all');
     };
@@ -91,11 +96,15 @@ export function useSearchEverywhereTriggers(
 type InDialogHandlers = {
   onCycle: (direction: 1 | -1) => void;
   onJump: (edge: 'first' | 'last') => void;
+  /** Alt+N: widen scope (IntelliJ's "include non-project items"). */
+  onWiden: () => void;
+  /** Whether Alt+N may be claimed right now (it's a dead key on macOS). */
+  canWidenWithAltN: () => boolean;
 };
 
 /**
  * In-dialog keyboard model: Tab / Shift+Tab cycle tabs, Cmd/Ctrl+Up/Down jump
- * to the first/last result. Registered on `window` capture so it runs before
+ * to the first/last result, Alt+N widens the scope. Registered on `window` capture so it runs before
  * the Dialog's document-level focus trap, which would otherwise eat Tab.
  */
 export function useSearchEverywhereDialogKeys(open: boolean, handlers: InDialogHandlers) {
@@ -117,6 +126,13 @@ export function useSearchEverywhereDialogKeys(open: boolean, handlers: InDialogH
         e.preventDefault();
         e.stopPropagation();
         handlersRef.current.onJump(e.key === 'ArrowUp' ? 'first' : 'last');
+        return;
+      }
+      // Match on code: Option+N on macOS emits a dead key, not "n".
+      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === 'KeyN' && handlersRef.current.canWidenWithAltN()) {
+        e.preventDefault();
+        e.stopPropagation();
+        handlersRef.current.onWiden();
       }
     };
     window.addEventListener('keydown', onKeyDown, true);

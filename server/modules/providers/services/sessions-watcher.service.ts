@@ -10,6 +10,12 @@ import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import { getClaudeHome } from '@/shared/utils.js';
 import type { LLMProvider } from '@/shared/types.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
+import {
+  buildWatcherOptions,
+  createKeyedCoalescer,
+  attachNativeTranscriptEvents,
+  type KeyedCoalescer,
+} from '@/modules/providers/services/sessions-watcher-options.js';
 
 type WatcherEventType = 'add' | 'change';
 
@@ -25,20 +31,35 @@ const getProviderWatchPaths = (): Array<{ provider: LLMProvider; rootPath: strin
   },
 ];
 
-const WATCHER_IGNORED_PATTERNS = [
-  '**/node_modules/**',
-  '**/.git/**',
-  '**/dist/**',
-  '**/build/**',
-  '**/*.tmp',
-  '**/*.swp',
-  '**/.DS_Store',
-];
-
 const PROJECTS_UPDATE_DEBOUNCE_MS = 500;
 const PROJECTS_UPDATE_MAX_WAIT_MS = 2_000;
 
+/**
+ * Per-file coalescing of raw watcher events before sync + incremental index.
+ * Native events fire on every append; this keeps a streaming transcript from
+ * being re-synced dozens of times a second while still landing within ~2s.
+ */
+const FILE_EVENT_DEBOUNCE_MS = 400;
+const FILE_EVENT_MAX_WAIT_MS = 2_000;
+
 const watchers: FSWatcher[] = [];
+
+type FileEvent = { eventType: WatcherEventType; provider: LLMProvider };
+
+let fileEventCoalescer: KeyedCoalescer<FileEvent> | null = null;
+
+function getFileEventCoalescer(): KeyedCoalescer<FileEvent> {
+  if (!fileEventCoalescer) {
+    fileEventCoalescer = createKeyedCoalescer<FileEvent>({
+      debounceMs: FILE_EVENT_DEBOUNCE_MS,
+      maxWaitMs: FILE_EVENT_MAX_WAIT_MS,
+      // An `add` folded with later `change`s is still a new file to the client.
+      merge: (previous, next) => (previous.eventType === 'add' ? previous : next),
+      run: (filePath, { eventType, provider }) => onUpdate(eventType, filePath, provider),
+    });
+  }
+  return fileEventCoalescer;
+}
 
 type PendingWatcherUpdate = {
   providers: Set<LLMProvider>;
@@ -232,7 +253,7 @@ async function onUpdate(
     });
 
     // Index only the bytes appended since last time so a growing transcript
-    // stays searchable without re-reading the whole file on every poll.
+    // stays searchable without re-reading the whole file on every event.
     if (provider === 'claude') {
       const sessionRow = result.sessionId
         ? sessionsDb.getSessionByProviderSessionId(result.sessionId) ?? sessionsDb.getSessionById(result.sessionId)
@@ -286,23 +307,36 @@ export async function initializeSessionsWatcher(): Promise<void> {
     try {
       await fsPromises.mkdir(rootPath, { recursive: true });
 
-      const watcher = chokidar.watch(rootPath, {
-        ignored: WATCHER_IGNORED_PATTERNS,
-        persistent: true,
-        ignoreInitial: true,
-        followSymlinks: false,
-        depth: 6,
-        usePolling: true,
-        interval: 6_000,
-        binaryInterval: 6_000,
-      });
+      const options = buildWatcherOptions();
+      const watcher = chokidar.watch(rootPath, options);
+      const coalescer = getFileEventCoalescer();
+      if (!options.usePolling) {
+        // Native mode watches directories only (see isIgnoredNativeWatchPath).
+        attachNativeTranscriptEvents(watcher, (filePath, eventType) => {
+          if (isWatcherTargetFile(provider, filePath)) {
+            coalescer.push(filePath, { eventType, provider });
+          }
+        });
+      }
 
+      // Polling mode keeps per-file watchers, which emit add/change directly.
       watcher
+        .on('ready', () => {
+          // Native mode holds one fd per watched directory; log it so growth is visible.
+          console.log(`Session watcher ready for provider "${provider}"`, {
+            usePolling: Boolean(options.usePolling),
+            watchedDirectories: Object.keys(watcher.getWatched()).length,
+          });
+        })
         .on('add', (filePath: string) => {
-          void onUpdate('add', filePath, provider);
+          if (isWatcherTargetFile(provider, filePath)) {
+            coalescer.push(filePath, { eventType: 'add', provider });
+          }
         })
         .on('change', (filePath: string) => {
-          void onUpdate('change', filePath, provider);
+          if (isWatcherTargetFile(provider, filePath)) {
+            coalescer.push(filePath, { eventType: 'change', provider });
+          }
         })
         .on('error', (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
@@ -325,6 +359,8 @@ export async function initializeSessionsWatcher(): Promise<void> {
  */
 export async function closeSessionsWatcher(): Promise<void> {
   clearPendingWatcherFlushTimer();
+  fileEventCoalescer?.close();
+  fileEventCoalescer = null;
 
   await Promise.all(
     watchers.map(async (watcher) => {

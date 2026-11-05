@@ -1,7 +1,5 @@
-import fs from 'node:fs';
-import readline from 'node:readline';
-
 import { extractClaudeSearchableMessage } from '@/modules/providers/services/claude-transcript-text.service.js';
+import { readFileLines } from '@/shared/utils.js';
 
 /**
  * Longest preview we surface as a sidebar label. Long enough to be recognisable,
@@ -34,14 +32,11 @@ const MAX_PREVIEW_SCAN_LINES = 200;
  * generic "New Session" label.
  */
 export async function readFirstUserMessagePreview(filePath: string): Promise<string> {
-  let lineReader: readline.Interface | undefined;
-
   try {
-    const fileStream = fs.createReadStream(filePath);
-    lineReader = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
     let scanned = 0;
-    for await (const line of lineReader) {
+    // Early `return`/`break` below is the common case; readFileLines is what
+    // releases the fd when the loop exits before EOF.
+    for await (const line of readFileLines(filePath)) {
       if (scanned >= MAX_PREVIEW_SCAN_LINES) {
         break;
       }
@@ -79,8 +74,6 @@ export async function readFirstUserMessagePreview(filePath: string): Promise<str
   } catch {
     // No transcript on disk, or an unreadable one: no preview, generic fallback.
     return '';
-  } finally {
-    lineReader?.close();
   }
 
   return '';

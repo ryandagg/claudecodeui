@@ -13,6 +13,7 @@ import { generateDisplayName } from '@/modules/projects/index.js';
 import {
   buildWatcherOptions,
   createKeyedCoalescer,
+  attachNativeTranscriptEvents,
   type KeyedCoalescer,
 } from '@/modules/providers/services/sessions-watcher-options.js';
 
@@ -306,10 +307,27 @@ export async function initializeSessionsWatcher(): Promise<void> {
     try {
       await fsPromises.mkdir(rootPath, { recursive: true });
 
-      const watcher = chokidar.watch(rootPath, buildWatcherOptions());
+      const options = buildWatcherOptions();
+      const watcher = chokidar.watch(rootPath, options);
       const coalescer = getFileEventCoalescer();
+      if (!options.usePolling) {
+        // Native mode watches directories only (see isIgnoredNativeWatchPath).
+        attachNativeTranscriptEvents(watcher, (filePath, eventType) => {
+          if (isWatcherTargetFile(provider, filePath)) {
+            coalescer.push(filePath, { eventType, provider });
+          }
+        });
+      }
 
+      // Polling mode keeps per-file watchers, which emit add/change directly.
       watcher
+        .on('ready', () => {
+          // Native mode holds one fd per watched directory; log it so growth is visible.
+          console.log(`Session watcher ready for provider "${provider}"`, {
+            usePolling: Boolean(options.usePolling),
+            watchedDirectories: Object.keys(watcher.getWatched()).length,
+          });
+        })
         .on('add', (filePath: string) => {
           if (isWatcherTargetFile(provider, filePath)) {
             coalescer.push(filePath, { eventType: 'add', provider });

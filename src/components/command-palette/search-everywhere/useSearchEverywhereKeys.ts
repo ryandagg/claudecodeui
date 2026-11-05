@@ -98,6 +98,8 @@ type InDialogHandlers = {
   onJump: (edge: 'first' | 'last') => void;
   /** Alt+N: widen scope (IntelliJ's "include non-project items"). */
   onWiden: () => void;
+  /** Whether Alt+N may be claimed right now (it's a dead key on macOS). */
+  canWidenWithAltN: () => boolean;
 };
 
 /**
@@ -127,7 +129,7 @@ export function useSearchEverywhereDialogKeys(open: boolean, handlers: InDialogH
         return;
       }
       // Match on code: Option+N on macOS emits a dead key, not "n".
-      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === 'KeyN') {
+      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === 'KeyN' && handlersRef.current.canWidenWithAltN()) {
         e.preventDefault();
         e.stopPropagation();
         handlersRef.current.onWiden();

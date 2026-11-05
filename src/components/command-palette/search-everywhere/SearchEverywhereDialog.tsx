@@ -166,6 +166,9 @@ export default function SearchEverywhereDialog({
   }, []);
 
   useSearchEverywhereDialogKeys(open, {
+    // ⌥N is macOS's dead key for ñ/ã/õ, so only claim it while the query is
+    // empty; mid-query it types normally (double-Shift still widens).
+    canWidenWithAltN: () => search.length === 0,
     onCycle: (direction) => setTab((current) => cycleTab(TABS, current, direction)),
     onJump: jumpTo,
     onWiden: widen,
@@ -188,9 +191,11 @@ export default function SearchEverywhereDialog({
     selectedProjectId: selectedProject?.projectId,
     runningSessionIds,
     recentlyViewedIds,
+    // Re-read the clock whenever the user changes anything, so the 10-min
+    // Running and 7-day Recently-active windows don't freeze at open time.
     now: Date.now(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [selectedProject?.projectId, runningSessionIds, recentlyViewedIds, open]);
+  }), [selectedProject?.projectId, runningSessionIds, recentlyViewedIds, open, search, scope.scope, scope.includeArchived, tab]);
 
   const run = React.useCallback((fn: () => void) => {
     setOpen(false);
@@ -221,8 +226,16 @@ export default function SearchEverywhereDialog({
     // Standalone archived sessions (their project is still active). Sessions
     // of archived projects can't open without the archive view's project
     // context, so they wait for server-side scoping (#13).
+    const indexById = new Map(out.map((entry, index) => [entry.session.id, index]));
     for (const a of archivedSessions) {
-      if (a.isProjectArchived || seen.has(a.sessionId)) continue;
+      if (a.isProjectArchived) continue;
+      // The sidebar cache can predate an archive action; the archive list wins.
+      const cachedIndex = indexById.get(a.sessionId);
+      if (cachedIndex !== undefined) {
+        const cached = out[cachedIndex];
+        out[cachedIndex] = { ...cached, isArchived: true, session: { ...cached.session, __isArchived: true } };
+        continue;
+      }
       seen.add(a.sessionId);
       const project = projects.find((p) => p.projectId === a.projectId) ?? null;
       out.push({

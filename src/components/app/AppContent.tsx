@@ -99,7 +99,7 @@ function AppContentInner() {
   });
 
   const searchEverywhereEnabled = useSearchEverywhereFlag();
-  const recentlyViewedIds = useRecentlyViewedSessions(selectedSession?.id);
+  const recentlyViewedIds = useRecentlyViewedSessions(selectedSession?.id, searchEverywhereEnabled);
   const runningSessionIds = useMemo(
     () => new Set(processingSessions.keys()),
     [processingSessions],

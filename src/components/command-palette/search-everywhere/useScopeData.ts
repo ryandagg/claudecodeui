@@ -44,20 +44,27 @@ export function usePersistentScope(surface: string): [ScopeState, (next: ScopeSt
 
 /**
  * Most-recent-first ids of sessions the user opened, from any surface.
- * Fed by the app's selected session, so sidebar clicks count too.
+ * Fed by the app's selected session, so sidebar clicks count too. Inert
+ * (no reads or writes) while the Search Everywhere flag is off.
  */
-export function useRecentlyViewedSessions(selectedSessionId: string | null | undefined): string[] {
-  const [ids, setIds] = useState<string[]>(() => parseRecentlyViewed(readStorage(RECENTLY_VIEWED_KEY)));
+export function useRecentlyViewedSessions(selectedSessionId: string | null | undefined, enabled: boolean): string[] {
+  const [ids, setIds] = useState<string[]>(() => (enabled ? parseRecentlyViewed(readStorage(RECENTLY_VIEWED_KEY)) : []));
+
+  // Flipping the flag on mid-session: pick up whatever was stored before.
+  useEffect(() => {
+    if (enabled) setIds(parseRecentlyViewed(readStorage(RECENTLY_VIEWED_KEY)));
+  }, [enabled]);
 
   useEffect(() => {
-    if (!selectedSessionId) return;
+    // Flag off must be zero-change: no tracking, no localStorage writes.
+    if (!enabled || !selectedSessionId) return;
     setIds((prev) => {
       if (prev[0] === selectedSessionId) return prev;
       const next = recordRecentlyViewed(prev, selectedSessionId);
       writeStorage(RECENTLY_VIEWED_KEY, JSON.stringify(next));
       return next;
     });
-  }, [selectedSessionId]);
+  }, [enabled, selectedSessionId]);
 
   return ids;
 }

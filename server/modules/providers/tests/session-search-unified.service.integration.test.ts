@@ -236,3 +236,25 @@ test('below the trigram floor and aborted signals return nothing', async () => {
     assert.deepEqual((await searchSessions(query('abc'), { signal: controller.signal })).results, []);
   });
 });
+
+test('a cursor that lands mid-session snaps forward to the next session boundary', async () => {
+  await withIsolatedIndex(async (dir) => {
+    for (let i = 0; i < 4; i += 1) {
+      await seed({
+        dir,
+        sessionId: `b-${i}`,
+        projectPath: '/p',
+        lines: [{ text: `zqsnap one ${i}` }, { text: `zqsnap two ${i}` }],
+      });
+    }
+    // Boundaries are 0/2/4/6 (2 matches per session). Cursor 3 is mid-session.
+    const full = await searchSessions(query('zqsnap'), { limit: 100 });
+    const order = full.results.flatMap((p) => p.sessions.map((s) => s.sessionId));
+    const snapped = await searchSessions(query('zqsnap'), { limit: 100, cursor: '3' });
+    const got = snapped.results.flatMap((p) => p.sessions.map((s) => s.sessionId));
+    assert.deepEqual(got, order.slice(2));
+    for (const project of snapped.results) {
+      for (const session of project.sessions) assert.equal(session.matches.length, 2);
+    }
+  });
+});

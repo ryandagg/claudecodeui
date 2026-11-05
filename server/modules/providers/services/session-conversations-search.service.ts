@@ -286,7 +286,9 @@ function queryPage(
       after: resolveSearchDate(query.after, dateOptions),
       before: resolveSearchDate(query.before, dateOptions),
       perSessionLimit,
-      limit: limit + perSessionLimit + 1,
+      // Room for: a partial leading session (snapped past), a full page, the
+      // tail of the last session, and one row to detect another page.
+      limit: limit + 2 * perSessionLimit + 1,
       offset,
     });
   } catch (error) {
@@ -296,15 +298,24 @@ function queryPage(
     return { rows: [], nextOffset: null };
   }
 
+  // A cursor that doesn't land on a session boundary (only possible if it was
+  // hand-edited) snaps forward to the next session start instead of beginning
+  // the page mid-session.
+  let skipped = 0;
+  while (skipped < fetched.length && fetched[skipped].session_rank !== 1) {
+    skipped += 1;
+  }
+
   let consumed = 0;
-  while (consumed < fetched.length) {
-    const row = fetched[consumed];
+  while (skipped + consumed < fetched.length) {
+    const row = fetched[skipped + consumed];
     if (consumed >= limit && row.session_rank === 1) break;
     consumed += 1;
   }
+  const end = skipped + consumed;
   return {
-    rows: fetched.slice(0, consumed),
-    nextOffset: consumed < fetched.length ? offset + consumed : null,
+    rows: fetched.slice(skipped, end),
+    nextOffset: end < fetched.length ? offset + end : null,
   };
 }
 
